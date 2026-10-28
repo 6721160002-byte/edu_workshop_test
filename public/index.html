@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>BSRU Workshop — ระบบจัดการอบรมและเวิร์กช็อป</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css"
+    />
+    <script async src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/assets/css/app.css" />
+    <style>
+      /* UX refresh: photo-led sign-in and scan-friendly notification center. */
+      .login {
+        max-width: 1120px;
+        grid-template-columns: minmax(0, 1.04fr) minmax(390px, 0.96fr);
+        min-height: 610px;
+        margin: 28px auto;
+        box-shadow: 0 24px 70px #27123b12;
+      }
+
+      .login .intro {
+        position: relative;
+        isolation: isolate;
+        min-height: 610px;
+        padding: clamp(30px, 5vw, 58px);
+        background: #32203f;
+        overflow: hidden;
+      }
+
+      .login .intro:after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        z-index: -1;
+        background: linear-gradient(
+          180deg,
+          #21132b50 0%,
+          #21132b9c 48%,
+          #21132bf2 100%
+        );
+      }
+
+      .login-cover {
+        position: absolute;
+        inset: 0;
+        z-index: -2;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        object-position: center;
+      }
+
+      .login-copy {
+        position: relative;
+        z-index: 1;
+        max-width: 480px;
+        margin-top: auto;
+      }
+
+      .login-copy .login-logo {
+        width: 74px;
+        height: 74px;
+        object-fit: contain;
+        border-radius: 16px;
+        padding: 5px;
+        margin-bottom: 30px;
+      }
+
+      .login-copy h1 {
+        font-size: clamp(30px, 3.3vw, 42px);
+        line-height: 1.28;
+        margin: 12px 0;
+      }
+
+      .login-copy p {
+        max-width: 390px;
+        font-size: 15px;
+        line-height: 1.9;
+      }
+
+      .login-promise {
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        color: #fffde8;
+        margin-top: 28px;
+      }
+
+      .login-promise i {
+        font-size: 24px;
+        color: #ffd18c;
+      }
+
+      .login .form {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        padding: clamp(30px, 5vw, 64px);
+      }
+
+      .login .form h2 {
+        font-size: 27px;
+        margin: 8px 0 4px;
+      }
+
+      .login .form > p.muted {
+        margin: 0 0 24px;
+      }
+
+      .login-submit {
+        width: 100%;
+        min-height: 48px;
+        justify-content: space-between;
+        margin-top: 8px;
+        padding: 12px 18px;
+      }
+
+      .login-register {
+        text-align: center;
+        font-size: 13px;
+        margin: 18px 0 4px;
+      }
+
+      .login-forgot {
+        width: 100%;
+        border: 0;
+        justify-content: center;
+        color: var(--purple);
+        background: transparent;
+        margin-top: 4px;
+      }
+
+      .login .demo {
+        font-size: 11px;
+        line-height: 1.75;
+        margin-top: 20px;
+        padding: 12px 14px;
+      }
+
+      .notification-page {
+        max-width: 980px;
+        margin: 26px auto 0;
+      }
+
+      .notification-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 8px 14px;
+        background: #fff;
+        border: 1px solid #ebe7ef;
+        border-radius: 16px;
+      }
+
+      .notification-tabs {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .notification-tab {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 46px;
+        padding: 10px 16px;
+        border: 0;
+        border-bottom: 2px solid transparent;
+        border-radius: 0;
+        background: transparent;
+        color: #77778b;
+        font-size: 14px;
+      }
+
+      .notification-tab span {
+        display: inline-grid;
+        place-items: center;
+        min-width: 22px;
+        height: 22px;
+        padding: 0 6px;
+        border-radius: 99px;
+        background: #f0edf4;
+        color: #676579;
+        font-size: 11px;
+      }
+
+      .notification-tab.active {
+        border-bottom-color: var(--purple);
+        color: var(--purple);
+        font-weight: 600;
+      }
+
+      .notification-tab.active span {
+        background: #f1e7f5;
+        color: var(--purple);
+      }
+
+      .notification-search {
+        position: relative;
+        display: block;
+        width: min(300px, 38%);
+        flex: none;
+      }
+
+      .notification-search i {
+        position: absolute;
+        left: 13px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: #9691a1;
+        font-size: 13px;
+      }
+
+      .notification-search input {
+        height: 42px;
+        padding: 9px 12px 9px 36px;
+        border-radius: 11px;
+        background: #faf9fb;
+        font-size: 12px;
+      }
+
+      .notification-summary {
+        margin: 14px 4px 10px;
+        color: #797789;
+        font-size: 12px;
+      }
+
+      .notification-list {
+        overflow: hidden;
+        background: #fff;
+        border: 1px solid #ebe7ef;
+        border-radius: 18px;
+      }
+
+      .notification-card {
+        display: grid;
+        grid-template-columns: 68px minmax(0, 1fr) 22px;
+        align-items: center;
+        gap: 17px;
+        width: 100%;
+        padding: 18px 20px;
+        border: 0;
+        border-bottom: 1px solid #f0edf2;
+        border-radius: 0;
+        background: #fff;
+        color: var(--navy);
+        text-align: left;
+        transition: background 0.16s ease;
+      }
+
+      .notification-card:last-child {
+        border-bottom: 0;
+      }
+
+      .notification-card:hover,
+      .notification-card:focus-visible {
+        background: #f8f3fa;
+      }
+
+      .notification-card.unread {
+        background: #fcf9fd;
+      }
+
+      .notification-card.unread:hover,
+      .notification-card.unread:focus-visible {
+        background: #f6eff9;
+      }
+
+      .notification-icon {
+        display: grid;
+        place-items: center;
+        width: 68px;
+        height: 68px;
+        border-radius: 14px;
+        background: linear-gradient(145deg, #a75eaf, #7b3d91);
+        color: #fff;
+        font-size: 27px;
+        box-shadow: 0 5px 13px #854c9e25;
+      }
+
+      .notification-copy {
+        display: grid;
+        gap: 4px;
+        min-width: 0;
+      }
+
+      .notification-meta {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .notification-source {
+        color: #98649c;
+        font-size: 12px;
+        font-weight: 500;
+      }
+
+      .notification-state {
+        color: #8c8796;
+        font-size: 10px;
+      }
+
+      .notification-card.unread .notification-state {
+        color: var(--purple);
+        font-weight: 600;
+      }
+
+      .notification-copy strong {
+        overflow: hidden;
+        color: #292437;
+        font-size: 14px;
+        font-weight: 600;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .notification-message {
+        display: -webkit-box;
+        overflow: hidden;
+        color: #686779;
+        font-size: 12px;
+        line-height: 1.65;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+      }
+
+      .notification-copy time {
+        margin-top: 2px;
+        color: #9995a2;
+        font-size: 11px;
+      }
+
+      .notification-chevron {
+        color: #aaa4b1;
+        font-size: 28px;
+        line-height: 1;
+        text-align: right;
+      }
+
+      .notification-empty {
+        display: grid;
+        justify-items: center;
+        gap: 5px;
+        padding: 58px 20px;
+        text-align: center;
+      }
+
+      .notification-empty-icon {
+        display: grid;
+        place-items: center;
+        width: 64px;
+        height: 64px;
+        margin-bottom: 8px;
+        border-radius: 18px;
+        background: #f3eaf6;
+        color: var(--purple);
+        font-size: 24px;
+      }
+
+      .notification-empty h2 {
+        font-size: 18px;
+        margin: 0;
+      }
+
+      .notification-empty p {
+        max-width: 420px;
+        margin: 0;
+        color: #7a8092;
+        font-size: 12px;
+      }
+
+      @media (max-width: 800px) {
+        .login {
+          grid-template-columns: minmax(0, 1fr) minmax(340px, 0.95fr);
+        }
+
+        .login .intro {
+          min-height: 560px;
+        }
+
+        .notification-card {
+          grid-template-columns: 60px minmax(0, 1fr) 18px;
+          gap: 13px;
+          padding: 16px;
+        }
+
+        .notification-icon {
+          width: 60px;
+          height: 60px;
+        }
+      }
+
+      @media (max-width: 600px) {
+        .login {
+          grid-template-columns: 1fr;
+          margin: 12px auto 20px;
+          border-radius: 18px;
+        }
+
+        .login .intro {
+          min-height: 260px;
+          padding: 24px;
+        }
+
+        .login-copy {
+          margin-top: auto;
+        }
+
+        .login-copy .login-logo {
+          width: 52px;
+          height: 52px;
+          margin-bottom: 15px;
+          border-radius: 12px;
+        }
+
+        .login-copy .eyebrow {
+          font-size: 9px;
+        }
+
+        .login-copy h1 {
+          max-width: 300px;
+          font-size: 26px;
+          line-height: 1.24;
+          margin: 7px 0;
+        }
+
+        .login-copy p {
+          max-width: 420px;
+          margin: 4px 0;
+          font-size: 12px;
+          line-height: 1.6;
+        }
+
+        .login-promise {
+          margin-top: 10px;
+          font-size: 10px;
+        }
+
+        .login-promise i {
+          font-size: 18px;
+        }
+
+        .login .form {
+          padding: 24px 20px;
+        }
+
+        .login .form h2 {
+          font-size: 23px;
+        }
+
+        .login .form > p.muted {
+          margin-bottom: 17px;
+        }
+
+        .login .demo {
+          margin-top: 14px;
+        }
+
+        .notification-page {
+          margin-top: 18px;
+        }
+
+        .notification-toolbar {
+          display: grid;
+          gap: 10px;
+          padding: 8px;
+          border-radius: 14px;
+        }
+
+        .notification-tabs {
+          width: 100%;
+          justify-content: stretch;
+        }
+
+        .notification-tab {
+          flex: 1;
+          justify-content: center;
+          min-height: 42px;
+          padding: 8px 10px;
+          font-size: 13px;
+        }
+
+        .notification-search {
+          width: 100%;
+        }
+
+        .notification-search input {
+          height: 40px;
+        }
+
+        .notification-summary {
+          margin: 12px 3px 8px;
+        }
+
+        .notification-list {
+          border-radius: 15px;
+        }
+
+        .notification-card {
+          grid-template-columns: 54px minmax(0, 1fr) 14px;
+          gap: 12px;
+          padding: 14px 12px;
+        }
+
+        .notification-icon {
+          width: 54px;
+          height: 58px;
+          border-radius: 12px;
+          font-size: 22px;
+        }
+
+        .notification-source {
+          font-size: 11px;
+        }
+
+        .notification-copy strong {
+          font-size: 13px;
+        }
+
+        .notification-message {
+          font-size: 11px;
+          -webkit-line-clamp: 2;
+        }
+
+        .notification-copy time {
+          font-size: 10px;
+        }
+
+        .notification-chevron {
+          font-size: 23px;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <noscript>
+      <p style="padding: 30px">
+        กรุณาดาวน์โหลดไฟล์ index.html แล้วเปิดด้วย Chrome หรือ Edge
+        และเปิดใช้งาน JavaScript เพื่อเข้าสู่ระบบ
+      </p>
+    </noscript>
+    <div id="app"></div>
+    <div id="modal-root"></div>
+    <div id="confirm-root"></div>
+    <div id="toast-root" role="status" aria-live="polite"></div>
+    <script src="/assets/js/app.js"></script>
+  </body>
+</html>

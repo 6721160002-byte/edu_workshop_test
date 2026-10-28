@@ -1,0 +1,4 @@
+node_modules/
+storage/*.sqlite*
+storage/*.log
+.npm-cache/
