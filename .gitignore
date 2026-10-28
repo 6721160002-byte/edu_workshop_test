@@ -2,3 +2,7 @@ node_modules/
 storage/*.sqlite*
 storage/*.log
 .npm-cache/
+.env
+.env.*
+!.env.example
+.vercel/

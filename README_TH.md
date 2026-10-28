@@ -1,5 +1,7 @@
 # BSRU Workshop — ระบบจัดการอบรมและเวิร์กช็อป
 
+การ Deploy บน Vercel ใช้ PostgreSQL ภายนอก ดูขั้นตอนและค่าที่ต้องตั้งใน [DEPLOY_VERCEL_TH.md](DEPLOY_VERCEL_TH.md)
+
 โครงการสาธิต Node.js + SQLite สำหรับใช้งานบนเครื่องนี้ หน้าเดิมถูกเก็บไว้ที่ `index.original.html`; เว็บให้บริการจาก `public/` และไฟล์ฐานข้อมูลอยู่ที่ `storage/bsru-workshop.sqlite` ซึ่งอยู่นอกโฟลเดอร์เว็บ
 
 ## สิ่งที่ต้องมี

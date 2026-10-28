@@ -1,8 +1,45 @@
 "use strict";
 
 module.exports = function createSeed({ db, passwordRecord, now }) {
-  function seed() {
-    if (db.prepare("SELECT count(*) AS n FROM users").get().n) return;
+  async function seed() {
+    if ((await db.prepare("SELECT count(*) AS n FROM users").get()).n) return;
+    if (db.kind === "postgres" && process.env.SEED_DEMO !== "1") {
+      const { validNewPassword } = require("../utils");
+      const email = String(process.env.BOOTSTRAP_ADMIN_EMAIL || "")
+        .trim()
+        .toLowerCase();
+      const password = process.env.BOOTSTRAP_ADMIN_PASSWORD;
+      if (
+        !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
+        !validNewPassword(password)
+      ) {
+        throw new Error(
+          "First deployment requires BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD (12+ characters with upper/lower case, a number and a symbol).",
+        );
+      }
+      const record = passwordRecord(password);
+      await db
+        .prepare(
+          `INSERT INTO users(id,name,type,code,email,phone,faculty,major,status,role,password_salt,password_hash,created_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        )
+        .run(
+          "admin",
+          "ผู้ดูแลระบบ",
+          "เจ้าหน้าที่",
+          "ADMIN-01",
+          email,
+          "",
+          "สำนักคอมพิวเตอร์",
+          "งานบริหารระบบ",
+          "APPROVED",
+          "staff",
+          record.salt,
+          record.hash,
+          now(),
+        );
+      return;
+    }
     const addUser =
       db.prepare(`INSERT INTO users(id,name,type,code,email,phone,faculty,major,status,role,password_salt,password_hash,created_at)
     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`);
@@ -46,7 +83,7 @@ module.exports = function createSeed({ db, passwordRecord, now }) {
     ];
     for (const user of users) {
       const password = passwordRecord("123456");
-      addUser.run(...user, password.salt, password.hash, now());
+      await addUser.run(...user, password.salt, password.hash, now());
     }
     const insertWorkshop =
       db.prepare(`INSERT INTO workshops(id,title,description,cover,start_at,end_at,place,capacity,hours,closed,created_at)
@@ -131,7 +168,7 @@ module.exports = function createSeed({ db, passwordRecord, now }) {
       capacity,
       hours,
     ] of samples) {
-      insertWorkshop.run(
+      await insertWorkshop.run(
         id,
         title,
         description,
@@ -155,7 +192,14 @@ module.exports = function createSeed({ db, passwordRecord, now }) {
       ["demo-r4", "student", "w2", "CANCELLED", -1],
       ["demo-r5", "teacher", "w4", "ATTENDED", -7],
     ])
-      reg.run(id, userId, workshopId, status, date(days, 8), date(days, 15));
+      await reg.run(
+        id,
+        userId,
+        workshopId,
+        status,
+        date(days, 8),
+        date(days, 15),
+      );
   }
 
   return { seed };

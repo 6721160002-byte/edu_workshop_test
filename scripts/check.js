@@ -13,7 +13,7 @@ function walk(dir) {
 }
 const files = [
   "server.js",
-  ...["src", "scripts", "tests", "public/assets/js"].flatMap(walk),
+  ...["api", "src", "scripts", "tests", "public/assets/js"].flatMap(walk),
 ].filter((file) => file.endsWith(".js"));
 for (const file of files) {
   const result = spawnSync(process.execPath, ["--check", file], {

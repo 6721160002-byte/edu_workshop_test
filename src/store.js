@@ -7,57 +7,60 @@ module.exports = function createStore({
   now,
   validCover,
 }) {
-  function workshopRows() {
-    return db
+  async function workshopRows() {
+    return await db
       .prepare(
         `SELECT w.*, (SELECT count(*) FROM registrations r WHERE r.workshop_id=w.id AND r.status IN ('PENDING','ATTENDED','ABSENT')) AS occupancy FROM workshops w ORDER BY w.start_at`,
       )
       .all();
   }
-  function stateFromDb(role, userId) {
+  async function stateFromDb(role, userId) {
     const staff = role === "staff";
     const users = staff
-      ? db.prepare("SELECT * FROM users ORDER BY created_at").all()
-      : db.prepare("SELECT * FROM users WHERE id=?").all(userId);
-    const workshops = db
-      .prepare("SELECT * FROM workshops ORDER BY start_at")
-      .all()
-      .map((w) => ({
-        id: w.id,
-        title: w.title,
-        description: w.description,
-        cover: w.cover,
-        start: localDateInput(w.start_at),
-        end: localDateInput(w.end_at),
-        place: w.place,
-        capacity: w.capacity,
-        hours: w.hours,
-        closed: Boolean(w.closed),
-        icon: "fa-graduation-cap",
-        category: "BSRU WORKSHOP",
-      }));
+      ? await db.prepare("SELECT * FROM users ORDER BY created_at").all()
+      : await db.prepare("SELECT * FROM users WHERE id=?").all(userId);
+    const workshops = (
+      await db.prepare("SELECT * FROM workshops ORDER BY start_at").all()
+    ).map((w) => ({
+      id: w.id,
+      title: w.title,
+      description: w.description,
+      cover: w.cover,
+      start: localDateInput(w.start_at),
+      end: localDateInput(w.end_at),
+      place: w.place,
+      capacity: w.capacity,
+      hours: w.hours,
+      closed: Boolean(w.closed),
+      icon: "fa-graduation-cap",
+      category: "BSRU WORKSHOP",
+    }));
     const registrations = staff
-      ? db.prepare("SELECT * FROM registrations ORDER BY created_at").all()
-      : db
+      ? await db
+          .prepare("SELECT * FROM registrations ORDER BY created_at")
+          .all()
+      : await db
           .prepare(
             "SELECT * FROM registrations WHERE user_id=? ORDER BY created_at",
           )
           .all(userId);
     const complaints = staff
-      ? db.prepare("SELECT * FROM complaints ORDER BY created_at DESC").all()
-      : db
+      ? await db
+          .prepare("SELECT * FROM complaints ORDER BY created_at DESC")
+          .all()
+      : await db
           .prepare(
             "SELECT * FROM complaints WHERE user_id=? ORDER BY created_at DESC",
           )
           .all(userId);
     const ratings = staff
-      ? db.prepare("SELECT * FROM ratings ORDER BY created_at").all()
-      : db
+      ? await db.prepare("SELECT * FROM ratings ORDER BY created_at").all()
+      : await db
           .prepare("SELECT * FROM ratings WHERE user_id=? ORDER BY created_at")
           .all(userId);
     const notifications = staff
       ? []
-      : db
+      : await db
           .prepare(
             "SELECT * FROM notifications WHERE user_id=? ORDER BY created_at DESC",
           )
@@ -74,28 +77,36 @@ module.exports = function createStore({
         updatedAt: r.updated_at,
         ratingEvent: r.id,
       })),
-      complaints: complaints.map((c) => ({
-        id: c.id,
-        userId: c.user_id,
-        issue: c.issue,
-        detail: c.detail,
-        status: c.status,
-        createdAt: c.created_at,
-        replies: db
-          .prepare(
-            "SELECT * FROM complaint_replies WHERE complaint_id=? ORDER BY created_at",
-          )
-          .all(c.id)
-          .map((r) => ({
-            id: r.id,
-            staffId: r.staff_id,
-            staffName:
-              db.prepare("SELECT name FROM users WHERE id=?").get(r.staff_id)
-                ?.name || "",
-            text: r.message,
-            createdAt: r.created_at,
-          })),
-      })),
+      complaints: await Promise.all(
+        complaints.map(async (c) => ({
+          id: c.id,
+          userId: c.user_id,
+          issue: c.issue,
+          detail: c.detail,
+          status: c.status,
+          createdAt: c.created_at,
+          replies: await Promise.all(
+            (
+              await db
+                .prepare(
+                  "SELECT * FROM complaint_replies WHERE complaint_id=? ORDER BY created_at",
+                )
+                .all(c.id)
+            ).map(async (r) => ({
+              id: r.id,
+              staffId: r.staff_id,
+              staffName:
+                (
+                  await db
+                    .prepare("SELECT name FROM users WHERE id=?")
+                    .get(r.staff_id)
+                )?.name || "",
+              text: r.message,
+              createdAt: r.created_at,
+            })),
+          ),
+        })),
+      ),
       ratings: ratings.map((r) => ({
         id: r.id,
         eventId: r.registration_id,
@@ -115,12 +126,12 @@ module.exports = function createStore({
         createdAt: n.created_at,
       })),
       revision:
-        db.prepare("SELECT revision FROM app_state WHERE id=1").get()
+        (await db.prepare("SELECT revision FROM app_state WHERE id=1").get())
           ?.revision || 0,
     };
   }
-  function ensureSnapshot() {
-    const existing = db
+  async function ensureSnapshot() {
+    const existing = await db
       .prepare("SELECT revision,data_json FROM app_state WHERE id=1")
       .get();
     if (existing) {
@@ -133,15 +144,17 @@ module.exports = function createStore({
             changed = true;
           }
       if (changed)
-        db.prepare(
-          "UPDATE app_state SET data_json=?,updated_at=? WHERE id=1",
-        ).run(JSON.stringify(snapshot), now());
+        await db
+          .prepare("UPDATE app_state SET data_json=?,updated_at=? WHERE id=1")
+          .run(JSON.stringify(snapshot), now());
       return;
     }
-    const initial = stateFromDb("staff", "admin");
-    db.prepare(
-      "INSERT INTO app_state(id,revision,data_json,updated_at) VALUES(1,?,?,?)",
-    ).run(0, JSON.stringify(initial), now());
+    const initial = await stateFromDb("staff", "admin");
+    await db
+      .prepare(
+        "INSERT INTO app_state(id,revision,data_json,updated_at) VALUES(1,?,?,?)",
+      )
+      .run(0, JSON.stringify(initial), now());
   }
 
   function viewFromSnapshot(snapshot, user) {
@@ -159,7 +172,7 @@ module.exports = function createStore({
   function equalJson(a, b) {
     return JSON.stringify(a) === JSON.stringify(b);
   }
-  function mergeSnapshot(user, incoming) {
+  async function mergeSnapshot(user, incoming) {
     if (
       !incoming ||
       !Array.isArray(incoming.users) ||
@@ -170,7 +183,7 @@ module.exports = function createStore({
       !Array.isArray(incoming.notifications)
     )
       throw Object.assign(new Error("ข้อมูลระบบไม่ครบ"), { status: 400 });
-    const currentRow = db
+    const currentRow = await db
       .prepare("SELECT revision,data_json FROM app_state WHERE id=1")
       .get();
     const current = JSON.parse(currentRow.data_json);
@@ -213,11 +226,13 @@ module.exports = function createStore({
         if (
           old &&
           Number(w.capacity) <
-            db
-              .prepare(
-                `SELECT count(*) n FROM registrations WHERE workshop_id=? AND status IN ('PENDING','ATTENDED','ABSENT')`,
-              )
-              .get(w.id).n
+            (
+              await db
+                .prepare(
+                  `SELECT count(*) n FROM registrations WHERE workshop_id=? AND status IN ('PENDING','ATTENDED','ABSENT')`,
+                )
+                .get(w.id)
+            ).n
         )
           throw Object.assign(
             new Error("จำนวนที่นั่งต้องไม่น้อยกว่าจำนวนผู้ลงทะเบียน"),
@@ -470,14 +485,14 @@ module.exports = function createStore({
     }
     return incoming;
   }
-  function writeSnapshot(snapshot) {
+  async function writeSnapshot(snapshot) {
     const upUser = db.prepare(
       `UPDATE users SET name=?,type=?,code=?,email=?,phone=?,faculty=?,major=?,status=? WHERE id=?`,
     );
     const userExists = db.prepare("SELECT id FROM users WHERE id=?");
     for (const u of snapshot.users)
-      if (userExists.get(u.id))
-        upUser.run(
+      if (await userExists.get(u.id))
+        await upUser.run(
           u.name,
           u.type,
           u.code,
@@ -492,7 +507,7 @@ module.exports = function createStore({
       `INSERT INTO workshops(id,title,description,cover,start_at,end_at,place,capacity,hours,closed,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,description=excluded.description,cover=excluded.cover,start_at=excluded.start_at,end_at=excluded.end_at,place=excluded.place,capacity=excluded.capacity,hours=excluded.hours,closed=excluded.closed`,
     );
     for (const w of snapshot.workshops)
-      upWorkshop.run(
+      await upWorkshop.run(
         w.id,
         w.title,
         w.description || "",
@@ -509,7 +524,7 @@ module.exports = function createStore({
       `INSERT INTO registrations(id,user_id,workshop_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,updated_at=excluded.updated_at`,
     );
     for (const r of snapshot.registrations)
-      upReg.run(
+      await upReg.run(
         r.id,
         r.userId,
         r.workshopId,
@@ -522,7 +537,7 @@ module.exports = function createStore({
     );
     for (const r of snapshot.ratings) {
       const registrationId = r.registrationId || r.eventId;
-      upRating.run(
+      await upRating.run(
         r.id,
         registrationId,
         r.userId,
@@ -537,7 +552,7 @@ module.exports = function createStore({
       `INSERT INTO complaint_replies(id,complaint_id,staff_id,message,created_at) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET message=excluded.message`,
     );
     for (const c of snapshot.complaints) {
-      upComplaint.run(
+      await upComplaint.run(
         c.id,
         c.userId,
         c.issue,
@@ -546,13 +561,13 @@ module.exports = function createStore({
         c.createdAt || now(),
       );
       for (const r of c.replies || [])
-        upReply.run(r.id, c.id, r.staffId, r.text, r.createdAt || now());
+        await upReply.run(r.id, c.id, r.staffId, r.text, r.createdAt || now());
     }
     const upNotice = db.prepare(
       `INSERT INTO notifications(id,user_id,title,message,related_type,related_id,read_at,created_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET read_at=excluded.read_at`,
     );
     for (const n of snapshot.notifications)
-      upNotice.run(
+      await upNotice.run(
         n.id,
         n.userId,
         n.title,

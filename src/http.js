@@ -27,6 +27,28 @@ module.exports = function createHttp({ MAX_BODY_BYTES }) {
     return out;
   }
   function bodyJson(req) {
+    // Vercel may parse the request body before invoking our function.
+    if (req.body !== undefined) {
+      try {
+        const raw = Buffer.isBuffer(req.body)
+          ? req.body.toString("utf8")
+          : req.body;
+        const size = Buffer.byteLength(
+          typeof raw === "string" ? raw : JSON.stringify(raw),
+        );
+        if (size > MAX_BODY_BYTES)
+          throw Object.assign(new Error("คำขอมีขนาดใหญ่เกินกำหนด"), {
+            status: 413,
+          });
+        return Promise.resolve(
+          typeof raw === "string" ? JSON.parse(raw || "{}") : raw,
+        );
+      } catch (error) {
+        return Promise.reject(
+          Object.assign(error, { status: error.status || 400 }),
+        );
+      }
+    }
     return new Promise((resolve, reject) => {
       let size = 0;
       const chunks = [];
