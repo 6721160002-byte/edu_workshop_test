@@ -2,6 +2,8 @@
 
 การ Deploy บน Vercel ใช้ PostgreSQL ภายนอก ดูขั้นตอนและค่าที่ต้องตั้งใน [DEPLOY_VERCEL_TH.md](DEPLOY_VERCEL_TH.md)
 
+UI ใช้งานจาก `public/index.html` โดยใช้สไตล์ร่วมใน `public/assets/css/premium.css` ครอบคลุมหน้าผู้เรียนและเจ้าหน้าที่ รองรับหน้าจอมือถือ เมนูผ่านคีย์บอร์ด และการตั้งค่า `prefers-reduced-motion` เพื่อปิด Motion
+
 โครงการสาธิต Node.js + SQLite สำหรับใช้งานบนเครื่องนี้ หน้าเดิมถูกเก็บไว้ที่ `index.original.html`; เว็บให้บริการจาก `public/` และไฟล์ฐานข้อมูลอยู่ที่ `storage/bsru-workshop.sqlite` ซึ่งอยู่นอกโฟลเดอร์เว็บ
 
 ## สิ่งที่ต้องมี

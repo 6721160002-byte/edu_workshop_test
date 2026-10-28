@@ -500,40 +500,76 @@
   const input = (label, name, type = "text", extra = "") =>
     `<div class="field"><label for="${name}">${label}</label>${type === "password" ? '<div class="password-wrap">' : ""}<input id="${name}" name="${name}" type="${type}" ${extra} required>${type === "password" ? `<button type="button" class="password-toggle" data-action="toggle-password" data-id="${name}" aria-controls="${name}" aria-pressed="false" aria-label="แสดงรหัสผ่าน"><i class="fa-regular fa-eye"></i><span>แสดง</span></button></div>` : ""}</div>`;
   function shell(content) {
-    const u = user();
+    const u = user(),
+      a = staff();
+    const icons = {
+      dashboard: "fa-chart-pie",
+      manage: "fa-layer-group",
+      workshops: "fa-compass",
+      mine: "fa-bookmark",
+      approvals: "fa-user-check",
+      participants: "fa-users",
+      complaints: "fa-comments",
+      "my-complaints": "fa-comment-dots",
+      reports: "fa-chart-simple",
+      notifications: "fa-bell",
+    };
     const nav = u
-      ? staff()
+      ? a
         ? [
             ["dashboard", "ภาพรวม"],
-            ["manage", "เวิร์กช็อป"],
+            ["manage", "จัดการเวิร์กช็อป"],
             ["approvals", "อนุมัติผู้ใช้งาน"],
-            ["participants", "ผู้เข้าร่วม"],
-            ["complaints", "คำร้องเรียน"],
+            ["participants", "ผู้เข้าร่วมอบรม"],
+            ["complaints", "คำร้องและความช่วยเหลือ"],
           ]
         : [
-            ["dashboard", "แดชบอร์ด"],
-            ["workshops", "เวิร์กช็อป"],
+            ["dashboard", "ภาพรวมของฉัน"],
+            ["workshops", "ค้นหาเวิร์กช็อป"],
             ["mine", "รายการของฉัน"],
+            ["reports", "ผลการอบรม"],
+            ["notifications", "การแจ้งเตือน"],
             ["my-complaints", "คำร้องของฉัน"],
-            ["reports", "รายงานผล / ชั่วโมงอบรม"],
           ]
       : [];
-    return `<header class="nav"><div class="wrap navin"><div class="brand"><div class="brandmark app-logo"><img src="${LOGO}" alt="โลโก้แอป BSRU Workshop"></div><div><b>BSRU <span style="font-weight:400">Workshop</span></b><div class="sub">มหาวิทยาลัยราชภัฏบ้านสมเด็จเจ้าพระยา</div></div></div>${state.portal ? `<span class="badge">${state.portal === "staff" ? "Staff Portal" : "User Portal"}</span>` : ""}${member() ? `<button class="btn small" data-action="page" data-id="notifications" aria-label="การแจ้งเตือน"><i class="fa-regular fa-bell"></i> แจ้งเตือน <span class="badge PENDING">${store.notifications.filter((n) => n.userId === u.id && !n.readAt).length}</span></button>` : ""}${member() ? '<button class="btn small" data-action="support" aria-label="แจ้งปัญหา / ร้องเรียน"><i class="fa-regular fa-circle-question"></i> แจ้งปัญหา</button>' : ""}<button class="btn small" data-action="switch"><i class="fa-solid fa-repeat"></i> สลับสิทธิ์</button>${u ? `<span class="user-name sub">${esc(u.name)}</span><button class="btn small" data-action="logout" aria-label="ออกจากระบบ"><i class="fa-solid fa-arrow-right-from-bracket"></i></button>` : ""}${nav.length ? `<nav class="tabs">${nav.map(([p, l]) => `<button data-action="page" data-id="${p}" class="${state.page === p ? "active" : ""}">${l}${p === "approvals" && store.users.some((u) => u.status === "WAITING") ? ` <span class="badge PENDING">${store.users.filter((u) => u.status === "WAITING").length}</span>` : ""}</button>`).join("")}</nav>` : ""}</div></header><main class="wrap main">${content}<footer class="foot">BSRU WORKSHOP SYSTEM · เรียนรู้ สร้างสรรค์ เติบโตไปด้วยกัน<br>ระบบสาธิตในเครื่อง • จัดเก็บข้อมูลในฐานข้อมูล SQLite</footer></main>`;
+    const active =
+      nav.find(([id]) => id === state.page)?.[1] || "พื้นที่การเรียนรู้";
+    const unread = u
+      ? store.notifications.filter((n) => n.userId === u.id && !n.readAt).length
+      : 0;
+    return `<a class="skip-link" href="#main-content">ข้ามไปยังเนื้อหา</a><div class="app-frame ${u ? "is-authenticated" : "is-public"}">
+      <header class="nav"><div class="wrap navin">
+        <div class="brand"><div class="brandmark app-logo"><img src="${LOGO}" alt="ตรามหาวิทยาลัยราชภัฏบ้านสมเด็จเจ้าพระยา"></div><div><b>BSRU <span>Workshop<span class="brand-dot">.</span></span></b><div class="sub">พื้นที่แห่งการเรียนรู้และเติบโต</div></div></div>
+        ${u ? `<div class="workspace-label">พื้นที่ทำงาน <span>/</span> <b>${esc(active)}</b></div>` : '<span class="header-motto"><span class="status-dot"></span> เรียนรู้วันนี้ เติบโตได้ทุกวัน</span>'}
+        <div class="header-actions">${state.portal ? `<span class="role-pill ${a || state.portal === "staff" ? "staff-role" : ""}"><i class="fa-solid ${state.portal === "staff" ? "fa-shield-halved" : "fa-graduation-cap"}" aria-hidden="true"></i>${state.portal === "staff" ? "เจ้าหน้าที่" : "ผู้เรียน"}</span>` : ""}
+        ${member() ? `<button class="btn icon-button" data-action="page" data-id="notifications" aria-label="การแจ้งเตือน ${unread} รายการที่ยังไม่อ่าน"><i class="fa-regular fa-bell" aria-hidden="true"></i>${unread ? '<span class="notification-dot"></span>' : ""}</button>` : ""}
+        ${u ? `<span class="header-avatar" aria-label="${esc(u.name)}">${esc(Array.from(u.name)[0])}</span><button class="btn icon-button mobile-action" data-action="switch" aria-label="เปลี่ยนบทบาท"><i class="fa-solid fa-repeat" aria-hidden="true"></i></button><button class="btn icon-button mobile-action" data-action="logout" aria-label="ออกจากระบบ"><i class="fa-solid fa-arrow-right-from-bracket" aria-hidden="true"></i></button>` : state.portal ? '<button class="btn small quiet" data-action="switch"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> เลือกบทบาทใหม่</button>' : ""}</div>
+      </div></header>
+      ${
+        u
+          ? `<aside class="sidebar"><div class="sidebar-label">${a ? "จัดการพื้นที่การเรียนรู้" : "พื้นที่การเรียนรู้ของคุณ"}</div><nav class="side-nav" aria-label="เมนูหลัก">${nav.map(([id, label]) => `<button data-action="page" data-id="${id}" class="${state.page === id ? "active" : ""}" ${state.page === id ? 'aria-current="page"' : ""}><i class="fa-solid ${icons[id]}" aria-hidden="true"></i><span>${label}</span>${id === "approvals" && store.users.some((x) => x.status === "WAITING") ? `<span class="nav-count">${store.users.filter((x) => x.status === "WAITING").length}</span>` : id === "notifications" && unread ? `<span class="nav-count">${unread}</span>` : ""}</button>`).join("")}</nav>
+        <div class="sidebar-note"><span class="note-spark"><i class="fa-solid fa-sparkles fa-star" aria-hidden="true"></i></span><b>ก้าวเล็ก ๆ สู่โอกาสใหม่</b><p>ทุกการเรียนรู้ คืออีกก้าวของการเติบโต</p>${member() ? '<button class="btn small" data-action="page" data-id="workshops">สำรวจเวิร์กช็อป <span aria-hidden="true">↗</span></button>' : '<span class="sub">สร้างประสบการณ์ที่ดีไปด้วยกัน</span>'}</div>
+        <div class="sidebar-bottom">${member() ? '<button data-action="support"><i class="fa-regular fa-circle-question" aria-hidden="true"></i> แจ้งปัญหาการใช้งาน</button>' : ""}<button data-action="switch"><i class="fa-solid fa-repeat" aria-hidden="true"></i> เปลี่ยนบทบาท</button><div class="profile-card"><span class="profile-avatar">${esc(Array.from(u.name)[0])}</span><div><b>${esc(u.name)}</b><span>${a ? "เจ้าหน้าที่ดูแลระบบ" : "สมาชิก BSRU Workshop"}</span></div><button data-action="logout" aria-label="ออกจากระบบ"><i class="fa-solid fa-arrow-right-from-bracket" aria-hidden="true"></i></button></div></div>
+      </aside>`
+          : ""
+      }
+      <main id="main-content" class="wrap main" tabindex="-1"><div class="page-stage">${content}</div><footer class="foot"><span>BSRU Workshop<span class="brand-dot">.</span></span><span>เรียนรู้ · สร้างสรรค์ · เติบโตไปด้วยกัน</span><span>มหาวิทยาลัยราชภัฏบ้านสมเด็จเจ้าพระยา</span></footer></main></div>`;
   }
   function selector() {
-    return `<section class="portal"><img class="selector-logo" src="${LOGO}" alt="โลโก้แอป BSRU Workshop"><div class="eyebrow">BANSOMDEJCHAOPRAYA RAJABHAT UNIVERSITY</div><h1>พื้นที่แห่งการเรียนรู้<br>และพัฒนาทักษะของคุณ</h1><p class="muted">ระบบจัดการอบรมและเวิร์กช็อป BSRU<br>เลือกบทบาทเพื่อเริ่มต้นใช้งาน</p><div class="grid two choices"><button class="panel choice" data-action="portal" data-id="user"><i class="fa-solid fa-user-graduate"></i><div class="eyebrow">LEARN & GROW</div><h2>สำหรับผู้ใช้งาน</h2><p>ค้นหาเวิร์กช็อป ลงทะเบียนเข้าร่วม<br>และติดตามผลการอบรมของคุณ</p><span style="color:var(--purple)">เข้าสู่ User Portal &nbsp; →</span></button><button class="panel choice" data-action="portal" data-id="staff"><i class="fa-solid fa-user-shield" style="background:#fff1d9;color:#c78012"></i><div class="eyebrow" style="color:#c78012">MANAGE & CONNECT</div><h2>สำหรับเจ้าหน้าที่</h2><p>จัดการกิจกรรม อนุมัติผู้ใช้งาน<br>และดูแลข้อมูลผู้เข้าร่วมอบรม</p><span style="color:var(--purple)">เข้าสู่ Staff Portal &nbsp; →</span></button></div><span class="sync">ข้อมูลสองฝั่งอัปเดตผ่านศูนย์กลางเดียวกัน</span></section>`;
+    return `<section class="portal"><div class="portal-intro"><span class="welcome-pill"><span class="status-dot"></span> YOUR NEXT CHAPTER STARTS HERE</span><h1>การเรียนรู้ที่ดี<br>เริ่มต้นที่<span>โอกาสใหม่</span><span class="heading-dot">.</span></h1><p class="portal-description">ค้นพบสิ่งที่คุณสนใจ เติมทักษะที่คุณต้องการ<br>พร้อมเติบโตไปด้วยกันในชุมชน BSRU</p><div class="portal-photo"><img src="${PHOTOS.team}" alt="บรรยากาศการเรียนรู้และแลกเปลี่ยนความคิดเห็น" fetchpriority="high"><div class="photo-caption"><span class="photo-caption-icon"><i class="fa-solid fa-graduation-cap" aria-hidden="true"></i></span><div><b>พื้นที่ของทุกความเป็นไปได้</b><span>เรียนรู้สิ่งใหม่ ในแบบของคุณ</span></div><span class="photo-arrow" aria-hidden="true">↗</span></div></div><div class="portal-values"><span><i class="fa-regular fa-compass" aria-hidden="true"></i> ค้นพบทักษะใหม่</span><span><i class="fa-regular fa-calendar-check" aria-hidden="true"></i> จัดการง่ายในที่เดียว</span><span><i class="fa-solid fa-seedling" aria-hidden="true"></i> เติบโตไปด้วยกัน</span></div></div>
+      <div class="portal-options"><div class="portal-options-heading"><span class="eyebrow">WELCOME TO BSRU WORKSHOP</span><h2>เริ่มต้นในพื้นที่ของคุณ</h2><p class="muted">เลือกบทบาทที่ต้องการเข้าใช้งาน</p></div><div class="choices"><button class="panel choice learner-choice" data-action="portal" data-id="user"><div class="choice-heading"><span class="choice-icon"><i class="fa-solid fa-user-graduate" aria-hidden="true"></i></span><span class="choice-index">01 / LEARN & GROW</span><span class="choice-arrow" aria-hidden="true">↗</span></div><h2>สำหรับผู้เรียน</h2><p>ค้นหาเวิร์กช็อป ลงทะเบียนเข้าร่วม<br>และติดตามทุกก้าวของการเรียนรู้</p><span class="choice-link">เข้าสู่พื้นที่ผู้เรียน <span aria-hidden="true">→</span></span></button><button class="panel choice staff-choice" data-action="portal" data-id="staff"><div class="choice-heading"><span class="choice-icon"><i class="fa-solid fa-sliders" aria-hidden="true"></i></span><span class="choice-index">02 / MANAGE & CONNECT</span><span class="choice-arrow" aria-hidden="true">↗</span></div><h2>สำหรับเจ้าหน้าที่</h2><p>สร้างกิจกรรม ดูแลผู้เข้าร่วม<br>และจัดการงานอบรมได้อย่างเป็นระบบ</p><span class="choice-link">เข้าสู่พื้นที่เจ้าหน้าที่ <span aria-hidden="true">→</span></span></button></div><div class="portal-help"><i class="fa-solid fa-circle-info" aria-hidden="true"></i><span>นักศึกษาและอาจารย์ เลือก “สำหรับผู้เรียน”</span></div></div></section>`;
   }
   function carousel() {
     if (!store.workshops.length) return "";
     const w = store.workshops[state.slide % store.workshops.length];
-    return `<section class="hero"><div class="eyebrow">WORKSHOP HIGHLIGHT · ${esc(w.category || "BSRU LEARNING")}</div><h1>${esc(w.title)}</h1><p>${esc(w.description || "เสริมทักษะใหม่ เปิดโอกาสใหม่ไปกับเวิร์กช็อป BSRU")}</p>${workshopMeta(w)}<div class="carousel-controls" aria-label="เลือกกิจกรรมประชาสัมพันธ์"><button data-action="slide" data-id="prev" aria-label="กิจกรรมก่อนหน้า">←</button>${store.workshops.map((_, i) => `<button class="${i === state.slide % store.workshops.length ? "active" : ""}" data-action="slide" data-id="${i}" aria-label="กิจกรรมที่ ${i + 1}">${i + 1}</button>`).join("")}<button data-action="slide" data-id="next" aria-label="กิจกรรมถัดไป">→</button></div></section>`;
+    return `<section class="hero">${w.cover ? `<img class="hero-feature-image" src="${esc(w.cover)}" alt="" loading="lazy">` : ""}<div class="eyebrow">WORKSHOP HIGHLIGHT · ${esc(w.category || "BSRU LEARNING")}</div><h1>${esc(w.title)}</h1><p>${esc(w.description || "เสริมทักษะใหม่ เปิดโอกาสใหม่ไปกับเวิร์กช็อป BSRU")}</p>${workshopMeta(w)}<div class="carousel-controls" aria-label="เลือกกิจกรรมประชาสัมพันธ์"><button data-action="slide" data-id="prev" aria-label="กิจกรรมก่อนหน้า">←</button>${store.workshops.map((_, i) => `<button class="${i === state.slide % store.workshops.length ? "active" : ""}" data-action="slide" data-id="${i}" aria-label="กิจกรรมที่ ${i + 1}">${i + 1}</button>`).join("")}<button data-action="slide" data-id="next" aria-label="กิจกรรมถัดไป">→</button></div></section>`;
   }
   function login() {
     const a = state.portal === "staff";
-    return `<section class="login"><div class="intro"><img class="login-cover" src="${PHOTOS.team}" alt=""><div class="login-copy"><img class="login-logo" src="${LOGO}" alt="โลโก้แอป BSRU Workshop"><div class="eyebrow" style="color:#ffcc89">${a ? "MANAGE & CONNECT" : "YOUR NEXT CHAPTER"}</div><h1>${a ? "จัดการทุกกิจกรรม<br>ได้ในพื้นที่เดียว" : "ทักษะใหม่<br>โอกาสใหม่ เริ่มที่นี่"}</h1><p>${a ? "ดูแลเวิร์กช็อปและผู้เข้าร่วม พร้อมเชื่อมต่อข้อมูลถึงผู้ใช้งานทันที" : "ค้นพบเวิร์กช็อปที่ใช่ พัฒนาศักยภาพของคุณไปกับชุมชน BSRU"}</p><div class="row space login-promise"><i class="fa-solid fa-graduation-cap" aria-hidden="true"></i><span>LEARNING NEVER STOPS.</span></div></div></div><section class="form"><div class="eyebrow">BSRU WORKSHOP</div><h2>ยินดีต้อนรับ${a ? "เจ้าหน้าที่" : "กลับมา"} 👋</h2><p class="muted">เข้าสู่ระบบ${a ? "สำหรับเจ้าหน้าที่" : "เพื่อเริ่มต้นการเรียนรู้"}</p><form id="login-form">${input("อีเมล หรือ เบอร์โทรศัพท์", "identity", "text", 'autocomplete="username" placeholder="กรอกอีเมลหรือเบอร์โทรศัพท์"')}${input("รหัสผ่าน", "password", "password", 'autocomplete="current-password" minlength="6" placeholder="กรอกรหัสผ่าน"')}<div class="error" id="login-error" role="alert"></div><button class="btn primary login-submit" ${!ready ? "disabled" : ""}>เข้าสู่ระบบ <span aria-hidden="true">→</span></button></form>${!a ? `<p class="login-register">ยังไม่มีบัญชี? <button class="btn small" data-action="register">สมัครใช้งานใหม่</button></p>` : ""}<button class="btn login-forgot" data-action="forgot"><i class="fa-solid fa-key" aria-hidden="true"></i> ลืมรหัสผ่าน</button><div class="demo"><b>บัญชีสำหรับทดลองใช้งาน</b><br>${a ? "admin1@bsru.ac.th / 0899990001" : "std_demo@bsru.ac.th / 0812345678<br>staff_demo@bsru.ac.th (อาจารย์)"}<br>รหัสผ่านเริ่มต้น: <b>123456</b><br><span class="sub">หากเปลี่ยนรหัสผ่านแล้ว ให้ใช้รหัสผ่านล่าสุด</span>${!ready ? "<br>กำลังเตรียมระบบเข้าสู่ระบบ…" : ""}</div></section></section>${!a ? `<div class="space">${carousel()}</div>` : ""}`;
+    return `<section class="login"><div class="intro"><img class="login-cover" src="${PHOTOS.team}" alt=""><div class="login-copy"><img class="login-logo" src="${LOGO}" alt="โลโก้แอป BSRU Workshop"><div class="eyebrow" style="color:#ffcc89">${a ? "MANAGE & CONNECT" : "YOUR NEXT CHAPTER"}</div><h1>${a ? "จัดการทุกกิจกรรม<br>ได้ในพื้นที่เดียว" : "ทักษะใหม่<br>โอกาสใหม่ เริ่มที่นี่"}</h1><p>${a ? "ดูแลเวิร์กช็อปและผู้เข้าร่วม พร้อมเชื่อมต่อข้อมูลถึงผู้ใช้งานทันที" : "ค้นพบเวิร์กช็อปที่ใช่ พัฒนาศักยภาพของคุณไปกับชุมชน BSRU"}</p><div class="row space login-promise"><i class="fa-solid fa-graduation-cap" aria-hidden="true"></i><span>LEARNING NEVER STOPS.</span></div></div></div><section class="form"><div class="eyebrow">BSRU WORKSHOP</div><h2>ยินดีต้อนรับ${a ? "เจ้าหน้าที่" : "กลับมา"} 👋</h2><p class="muted">เข้าสู่ระบบ${a ? "สำหรับเจ้าหน้าที่" : "เพื่อเริ่มต้นการเรียนรู้"}</p><form id="login-form">${input("อีเมล หรือ เบอร์โทรศัพท์", "identity", "text", 'autocomplete="username" placeholder="กรอกอีเมลหรือเบอร์โทรศัพท์"')}${input("รหัสผ่าน", "password", "password", 'autocomplete="current-password" minlength="6" placeholder="กรอกรหัสผ่าน"')}<div class="error" id="login-error" role="alert"></div><button class="btn primary login-submit" ${!ready ? "disabled" : ""}>เข้าสู่ระบบ <span aria-hidden="true">→</span></button></form>${!a ? `<p class="login-register">ยังไม่มีบัญชี? <button class="btn small" data-action="register">สมัครใช้งานใหม่</button></p>` : ""}<button class="btn login-forgot" data-action="forgot"><i class="fa-solid fa-key" aria-hidden="true"></i> ลืมรหัสผ่าน</button><details class="demo"><summary><i class="fa-solid fa-flask" aria-hidden="true"></i> บัญชีสำหรับทดลองใช้งาน</summary><div class="demo-content">${a ? "admin1@bsru.ac.th / 0899990001" : "std_demo@bsru.ac.th / 0812345678<br>staff_demo@bsru.ac.th (อาจารย์)"}<br>รหัสผ่านเริ่มต้น: <b>123456</b><br><span class="sub">หากเปลี่ยนรหัสผ่านแล้ว ให้ใช้รหัสผ่านล่าสุด</span>${!ready ? "<br>กำลังเตรียมระบบเข้าสู่ระบบ…" : ""}</div></details></section></section>`;
   }
   function title(eyebrow, heading, desc, action = "") {
-    return `<div class="row between"><div><div class="eyebrow">${eyebrow}</div><h1>${heading}</h1><p class="muted" style="margin:0">${desc}</p></div>${action}</div>`;
+    return `<div class="row between page-heading"><div><div class="eyebrow">${eyebrow}</div><h1>${heading}</h1><p class="muted" style="margin:0">${desc}</p></div>${action}</div>`;
   }
   function summaryCharts(regs) {
     const statuses = [
@@ -845,6 +881,7 @@
     confirmReturn?.focus?.();
     if (resolve) resolve(answer);
   }
+  let previousView = null;
   function render() {
     let content;
     if (!state.portal) content = selector();
@@ -865,7 +902,18 @@
           state.page
         ] || dashboard
       )();
+    const view = [state.portal, state.userId, state.page].join(":");
+    const changed = view !== previousView;
+    const hadView = previousView !== null;
     $("#app").innerHTML = shell(content);
+    if (changed) {
+      $(".page-stage")?.classList.add("is-entering");
+      if (hadView) {
+        window.scrollTo({ top: 0, behavior: "auto" });
+        $("#main-content")?.focus({ preventScroll: true });
+      }
+    }
+    previousView = view;
   }
   function openModal(title, body) {
     modalReturn = document.activeElement;

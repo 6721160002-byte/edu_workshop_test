@@ -50,6 +50,7 @@ test("isolated application: assets, login, authorization and persistence", async
   for (const asset of [
     "/assets/js/app.js",
     "/assets/css/app.css",
+    "/assets/css/premium.css",
     ...fs
       .readdirSync("public/assets/images")
       .map((name) => "/assets/images/" + name),
