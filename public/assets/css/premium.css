@@ -2858,3 +2858,11 @@ td b {
 @media(max-width:1100px) { .nav .header-motto { display:none; } }
 @media(max-width:720px) { .nav .brand { gap:10px; } .nav .brand .brand-title { font-size:20px; } .nav .brand .brand-subtitle { font-size:13px; } .nav .brand .brand-institution { display:none; } .nav .navin { flex-wrap:wrap; } }
 @media(max-width:380px) { .nav .brand .brand-title { font-size:18px; } .nav .brand .brand-subtitle { font-size:12px; } }
+
+
+/* Thai brand names in the shared header on every page. */
+.nav .brand .brand-title { font-size:22px; line-height:1.5; letter-spacing:-.3px; white-space:normal; color:#292237; }
+.nav .brand .brand-institution { display:block; font-size:14px; line-height:1.65; color:#6c6278; }
+.nav .brand .brand-copy { gap:4px; }
+@media(max-width:720px) { .nav .brand .brand-title { font-size:18px; } .nav .brand .brand-institution { display:block; font-size:12px; } .nav .brand .brand-copy { max-width:290px; } }
+@media(max-width:380px) { .nav .brand .brand-title { font-size:16px; } .nav .brand .brand-institution { font-size:12px; } .nav .brand .brand-copy { max-width:235px; } }
