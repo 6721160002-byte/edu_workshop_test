@@ -2,6 +2,10 @@
 
 module.exports = function createStatic({ fs, path, PUBLIC, MIME }) {
   function serveStatic(req, res, url) {
+    if (!["GET", "HEAD"].includes(req.method)) {
+      res.writeHead(405, { Allow: "GET, HEAD" });
+      return res.end();
+    }
     let requested;
     try {
       requested =
@@ -9,6 +13,10 @@ module.exports = function createStatic({ fs, path, PUBLIC, MIME }) {
     } catch {
       res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
       return res.end("URL ไม่ถูกต้อง");
+    }
+    if (requested.includes("\0")) {
+      res.writeHead(400);
+      return res.end("Invalid URL");
     }
     const file = path.resolve(PUBLIC, "." + requested);
     if (!file.startsWith(PUBLIC + path.sep)) {
@@ -27,7 +35,11 @@ module.exports = function createStatic({ fs, path, PUBLIC, MIME }) {
         "X-Content-Type-Options": "nosniff",
         "Cache-Control": "no-store",
       });
-      fs.createReadStream(file).pipe(res);
+      if (req.method === "HEAD") return res.end();
+      const stream = fs.createReadStream(file);
+      stream.on("error", () => res.destroy());
+      res.on("close", () => stream.destroy());
+      stream.pipe(res);
     });
   }
 

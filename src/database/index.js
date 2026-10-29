@@ -44,5 +44,6 @@ module.exports = async function openDatabase() {
     return result;
   };
   db.kind = "sqlite";
+  db.boolean = (value) => Number(Boolean(value));
   return db;
 };

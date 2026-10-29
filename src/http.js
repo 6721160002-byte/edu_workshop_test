@@ -1,6 +1,14 @@
 "use strict";
 
 module.exports = function createHttp({ MAX_BODY_BYTES }) {
+  function parseBody(value) {
+    const data = typeof value === "string" ? JSON.parse(value || "{}") : value;
+    if (!data || typeof data !== "object" || Array.isArray(data))
+      throw Object.assign(new Error("ข้อมูลคำขอต้องเป็น JSON object"), {
+        status: 400,
+      });
+    return data;
+  }
   function json(res, status, data, extra = {}) {
     const body = Buffer.from(JSON.stringify(data));
     res.writeHead(status, {
@@ -40,9 +48,7 @@ module.exports = function createHttp({ MAX_BODY_BYTES }) {
           throw Object.assign(new Error("คำขอมีขนาดใหญ่เกินกำหนด"), {
             status: 413,
           });
-        return Promise.resolve(
-          typeof raw === "string" ? JSON.parse(raw || "{}") : raw,
-        );
+        return Promise.resolve(parseBody(raw));
       } catch (error) {
         return Promise.reject(
           Object.assign(error, { status: error.status || 400 }),
@@ -60,12 +66,13 @@ module.exports = function createHttp({ MAX_BODY_BYTES }) {
               status: 413,
             }),
           );
-          req.destroy();
+          chunks.length = 0;
         } else chunks.push(chunk);
       });
       req.on("end", () => {
         try {
-          resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"));
+          if (size <= MAX_BODY_BYTES)
+            resolve(parseBody(Buffer.concat(chunks).toString("utf8")));
         } catch {
           reject(
             Object.assign(new Error("รูปแบบข้อมูลไม่ถูกต้อง"), { status: 400 }),

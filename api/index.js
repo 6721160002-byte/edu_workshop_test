@@ -11,12 +11,14 @@ module.exports = async function handler(req, res) {
     console.error("Application initialization failed:", error);
     res.statusCode = 503;
     res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store");
     res.end(
       JSON.stringify({
-        code:
-          error.code === "DATABASE_URL_MISSING"
-            ? "DATABASE_URL_MISSING"
-            : "APPLICATION_INITIALIZATION_FAILED",
+        code: ["DATABASE_URL_MISSING", "BOOTSTRAP_ADMIN_REQUIRED"].includes(
+          error.code,
+        )
+          ? error.code
+          : "APPLICATION_INITIALIZATION_FAILED",
         error:
           "Database initialization failed. Check the deployment database configuration and function logs.",
       }),

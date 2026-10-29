@@ -14,17 +14,28 @@ function parameters(sql) {
 
 function createPostgresDatabase(pool) {
   const scope = new AsyncLocalStorage();
+  let booleanClosed = true;
+  const normalize = (row) =>
+    row &&
+    Object.fromEntries(
+      Object.entries(row).map(([key, value]) => [
+        key,
+        value instanceof Date ? value.toISOString() : value,
+      ]),
+    );
   const query = (sql, values = []) =>
     (scope.getStore()?.client || pool).query(parameters(sql), values);
   const db = {
     kind: "postgres",
+    boolean: (value) =>
+      booleanClosed ? Boolean(value) : Number(Boolean(value)),
     prepare(sql) {
       return {
         async get(...values) {
-          return (await query(sql, values)).rows[0];
+          return normalize((await query(sql, values)).rows[0]);
         },
         async all(...values) {
-          return (await query(sql, values)).rows;
+          return (await query(sql, values)).rows.map(normalize);
         },
         async run(...values) {
           return { changes: (await query(sql, values)).rowCount };
@@ -70,6 +81,12 @@ function createPostgresDatabase(pool) {
       await db.withRequest(async () => {
         await db.exec("BEGIN IMMEDIATE");
         await db.exec(schema);
+        const column = await db
+          .prepare(
+            "SELECT data_type FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='workshops' AND column_name='closed'",
+          )
+          .get();
+        booleanClosed = column?.data_type === "boolean";
         await db.exec("COMMIT");
       });
     },

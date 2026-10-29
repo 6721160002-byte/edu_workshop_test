@@ -4,7 +4,7 @@ module.exports = function createAuth({
   db,
   parseCookies,
   hashToken,
-  now,
+  isExpired,
   publicUser,
   json,
 }) {
@@ -16,7 +16,8 @@ module.exports = function createAuth({
         `SELECT s.token_hash,s.csrf_token,s.expires_at,u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=?`,
       )
       .get(hashToken(raw));
-    if (!row || row.expires_at < now()) return null;
+    if (!row || isExpired(row.expires_at) || row.status !== "APPROVED")
+      return null;
     return { row, user: publicUser(row), csrf: row.csrf_token };
   }
   async function requireSession(req, res, role) {

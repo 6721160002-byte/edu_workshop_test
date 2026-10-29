@@ -13,6 +13,12 @@ const APP_ORIGIN = process.env.APP_ORIGIN
   ? new URL(process.env.APP_ORIGIN).origin
   : null;
 const PREFERRED_PORT = Number(process.env.PORT || 8001);
+if (
+  !Number.isInteger(PREFERRED_PORT) ||
+  PREFERRED_PORT < 0 ||
+  PREFERRED_PORT > 65535
+)
+  throw new Error("PORT must be an integer from 0 to 65535.");
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const MAX_BODY_BYTES = 12 * 1024 * 1024;
 const MIME = {

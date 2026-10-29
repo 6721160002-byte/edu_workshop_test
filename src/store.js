@@ -1,7 +1,11 @@
 "use strict";
+const { isDeepStrictEqual } = require("node:util");
 
 module.exports = function createStore({
   db,
+  readJson,
+  workshopTime,
+  workshopTimestamp,
   localDateInput,
   publicUser,
   now,
@@ -59,7 +63,9 @@ module.exports = function createStore({
           .prepare("SELECT * FROM ratings WHERE user_id=? ORDER BY created_at")
           .all(userId);
     const notifications = staff
-      ? []
+      ? await db
+          .prepare("SELECT * FROM notifications ORDER BY created_at DESC")
+          .all()
       : await db
           .prepare(
             "SELECT * FROM notifications WHERE user_id=? ORDER BY created_at DESC",
@@ -67,6 +73,7 @@ module.exports = function createStore({
           .all(userId);
     return {
       users: users.map(publicUser),
+      auditLog: [],
       workshops,
       registrations: registrations.map((r) => ({
         id: r.id,
@@ -135,8 +142,29 @@ module.exports = function createStore({
       .prepare("SELECT revision,data_json FROM app_state WHERE id=1")
       .get();
     if (existing) {
-      const snapshot = JSON.parse(existing.data_json);
+      const snapshot = readJson(existing.data_json);
       let changed = false;
+      // A manually created app_state row may still contain its default {}.
+      const collections = [
+        "users",
+        "workshops",
+        "registrations",
+        "ratings",
+        "complaints",
+        "notifications",
+        "auditLog",
+      ];
+      if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot))
+        throw new Error(
+          "Invalid app_state document; restore a valid database backup.",
+        );
+      if (collections.some((key) => !Array.isArray(snapshot[key]))) {
+        const relational = await stateFromDb("staff", "admin");
+        for (const key of collections)
+          if (!Array.isArray(snapshot[key])) snapshot[key] = relational[key];
+        snapshot.revision = existing.revision;
+        changed = true;
+      }
       for (const w of snapshot.workshops || [])
         for (const field of ["start", "end"])
           if (typeof w[field] === "string" && w[field].endsWith("Z")) {
@@ -162,6 +190,13 @@ module.exports = function createStore({
     const onlyMine = (items) => items.filter((item) => item.userId === user.id);
     return {
       ...snapshot,
+      auditLog: [],
+      workshops: snapshot.workshops.map((workshop) => ({
+        ...workshop,
+        occupancy: snapshot.registrations.filter(
+          (r) => r.workshopId === workshop.id && r.status !== "CANCELLED",
+        ).length,
+      })),
       users: snapshot.users.filter((item) => item.id === user.id),
       registrations: onlyMine(snapshot.registrations),
       ratings: onlyMine(snapshot.ratings),
@@ -169,8 +204,33 @@ module.exports = function createStore({
       notifications: onlyMine(snapshot.notifications),
     };
   }
+  async function refreshSnapshot() {
+    const row = await db
+      .prepare("SELECT revision,data_json FROM app_state WHERE id=1")
+      .get();
+    const previous = readJson(row.data_json);
+    const next = await stateFromDb("staff", "admin");
+    next.auditLog = Array.isArray(previous.auditLog) ? previous.auditLog : [];
+    next.workshops = next.workshops.map((workshop) => {
+      const old = previous.workshops.find((item) => item.id === workshop.id);
+      return {
+        ...old,
+        ...workshop,
+        icon: old?.icon || workshop.icon,
+        category: old?.category || workshop.category,
+        ...(old?.photoSource ? { photoSource: old.photoSource } : {}),
+      };
+    });
+    next.revision = row.revision + 1;
+    await db
+      .prepare(
+        "UPDATE app_state SET revision=?,data_json=?,updated_at=? WHERE id=1",
+      )
+      .run(next.revision, JSON.stringify(next), now());
+    return next;
+  }
   function equalJson(a, b) {
-    return JSON.stringify(a) === JSON.stringify(b);
+    return isDeepStrictEqual(a, b);
   }
   async function mergeSnapshot(user, incoming) {
     if (
@@ -186,12 +246,36 @@ module.exports = function createStore({
     const currentRow = await db
       .prepare("SELECT revision,data_json FROM app_state WHERE id=1")
       .get();
-    const current = JSON.parse(currentRow.data_json);
+    const current = readJson(currentRow.data_json);
+    if (!Array.isArray(incoming.auditLog))
+      incoming.auditLog = Array.isArray(current.auditLog)
+        ? current.auditLog
+        : [];
+    for (const key of [
+      "users",
+      "workshops",
+      "registrations",
+      "ratings",
+      "complaints",
+      "notifications",
+    ]) {
+      const ids = incoming[key].map((item) => item?.id);
+      if (
+        ids.some((id) => typeof id !== "string" || !id || id.length > 160) ||
+        new Set(ids).size !== ids.length
+      )
+        throw Object.assign(new Error("ข้อมูลมีรหัสว่างหรือซ้ำกัน"), {
+          status: 400,
+        });
+    }
     if (Number(incoming.revision) !== Number(currentRow.revision) + 1)
       throw Object.assign(
         new Error("ข้อมูลเปลี่ยนจากอีกหน้าต่างแล้ว กรุณาโหลดหน้าใหม่"),
         { status: 409 },
       );
+    // Audit entries are generated from validated changes on the server.
+    incoming.auditLog = current.auditLog || [];
+    const oldAudit = Array.isArray(current.auditLog) ? current.auditLog : [];
     if (user.role === "staff") {
       const oldUsers = new Map(current.users.map((x) => [x.id, x]));
       for (const next of incoming.users) {
@@ -240,7 +324,7 @@ module.exports = function createStore({
           );
         if (
           old &&
-          Date.parse(old.end) <= Date.now() &&
+          workshopTime(old.end) <= Date.now() &&
           Boolean(w.closed) !== Boolean(old.closed)
         )
           throw Object.assign(
@@ -264,14 +348,20 @@ module.exports = function createStore({
             !w.start ||
             !w.end ||
             !w.place ||
+            ![w.title, w.place, w.description || ""].every(
+              (value) => typeof value === "string",
+            ) ||
+            !Number.isFinite(workshopTime(w.start)) ||
+            !Number.isFinite(workshopTime(w.end)) ||
+            typeof w.closed !== "boolean" ||
             !Number.isInteger(Number(w.capacity)) ||
             Number(w.capacity) < 1 ||
             !Number.isFinite(Number(w.hours)) ||
             Number(w.hours) < 0.5 ||
             (Number(w.hours) * 2) % 1 !== 0 ||
-            Date.parse(w.end) <= Date.parse(w.start) ||
+            workshopTime(w.end) <= workshopTime(w.start) ||
             Number(w.hours) >
-              (Date.parse(w.end) - Date.parse(w.start)) / 3600000 ||
+              (workshopTime(w.end) - workshopTime(w.start)) / 3600000 ||
             !validCover(w.cover),
         )
       )
@@ -325,9 +415,39 @@ module.exports = function createStore({
             throw Object.assign(new Error("ผู้ตอบคำร้องไม่ถูกต้อง"), {
               status: 403,
             });
+        if (
+          (old.replies || []).some(
+            (reply) =>
+              !equalJson(
+                reply,
+                (c.replies || []).find((next) => next.id === reply.id),
+              ),
+          )
+        )
+          throw Object.assign(
+            new Error("ไม่อนุญาตให้แก้ไขหรือลบประวัติคำตอบ"),
+            { status: 403 },
+          );
+        if (!["OPEN", "REPLIED", "CLOSED"].includes(c.status))
+          throw Object.assign(new Error("สถานะคำร้องไม่ถูกต้อง"), {
+            status: 400,
+          });
       }
       if (incoming.complaints.length !== current.complaints.length)
         throw Object.assign(new Error("ไม่อนุญาตให้ลบคำร้อง"), { status: 403 });
+      if (!equalJson(current.ratings, incoming.ratings))
+        throw Object.assign(
+          new Error("เจ้าหน้าที่แก้ไขผลประเมินของผู้ใช้ไม่ได้"),
+          { status: 403 },
+        );
+      for (const next of incoming.notifications) {
+        const old = current.notifications.find((item) => item.id === next.id);
+        if (old && !equalJson(old, next))
+          throw Object.assign(
+            new Error("ไม่อนุญาตให้แก้ไขประวัติการแจ้งเตือน"),
+            { status: 403 },
+          );
+      }
       for (const collection of ["ratings", "notifications"])
         if (
           current[collection].some(
@@ -342,7 +462,9 @@ module.exports = function createStore({
       const own = current.users.find((x) => x.id === user.id),
         proposedUser = incoming.users.length === 1 ? incoming.users[0] : null;
       const stripPresentation = (rows) =>
-        rows.map(({ cover, icon, category, photoSource, ...item }) => item);
+        rows.map(
+          ({ cover, icon, category, photoSource, occupancy, ...item }) => item,
+        );
       if (
         !proposedUser ||
         !equalJson(own, proposedUser) ||
@@ -410,7 +532,7 @@ module.exports = function createStore({
           (old?.status === "CANCELLED" && r.status === "PENDING")
         ) {
           const w = current.workshops.find((x) => x.id === r.workshopId);
-          if (!w || w.closed || Date.parse(w.start) <= Date.now())
+          if (!w || w.closed || workshopTime(w.start) <= Date.now())
             throw Object.assign(new Error("กิจกรรมปิดรับลงทะเบียนแล้ว"), {
               status: 409,
             });
@@ -429,6 +551,22 @@ module.exports = function createStore({
             ).length;
           if (occupied > Number(w.capacity))
             throw Object.assign(new Error("ที่นั่งเต็มแล้ว"), { status: 409 });
+          const conflict = incoming.registrations.find((other) => {
+            if (other.id === r.id || other.status === "CANCELLED") return false;
+            const event = current.workshops.find(
+              (x) => x.id === other.workshopId,
+            );
+            return (
+              event &&
+              workshopTime(w.start) < workshopTime(event.end) &&
+              workshopTime(event.start) < workshopTime(w.end)
+            );
+          });
+          if (conflict)
+            throw Object.assign(
+              new Error("เวลาตรงกับกิจกรรมที่คุณลงทะเบียนไว้แล้ว"),
+              { status: 409 },
+            );
         }
       }
       for (const rating of incoming.ratings) {
@@ -452,6 +590,15 @@ module.exports = function createStore({
       }
       for (const c of incoming.complaints) {
         const old = current.complaints.find((x) => x.id === c.id);
+        if (
+          typeof c.issue !== "string" ||
+          !c.issue.trim() ||
+          typeof c.detail !== "string"
+        )
+          throw Object.assign(
+            new Error("หัวข้อหรือรายละเอียดคำร้องไม่ถูกต้อง"),
+            { status: 400 },
+          );
         if (old && !equalJson(old, c))
           throw Object.assign(new Error("ผู้ใช้แก้ไขคำร้องที่ส่งแล้วไม่ได้"), {
             status: 403,
@@ -483,6 +630,56 @@ module.exports = function createStore({
         revision: incoming.revision,
       };
     }
+    if (user.role === "staff") {
+      for (const workshop of incoming.workshops) {
+        const old = current.workshops.find((row) => row.id === workshop.id);
+        if (
+          !old ||
+          !["start", "end", "place", "closed"].some(
+            (key) => old[key] !== workshop[key],
+          )
+        )
+          continue;
+        for (const r of incoming.registrations.filter(
+          (row) => row.workshopId === workshop.id && row.status !== "CANCELLED",
+        )) {
+          incoming.notifications.push({
+            id: require("node:crypto").randomUUID(),
+            userId: r.userId,
+            title: "อัปเดตข้อมูลกิจกรรม",
+            body: `กิจกรรม “${workshop.title}” มีการเปลี่ยนแปลงวัน เวลา สถานที่ หรือการรับสมัคร กรุณาตรวจสอบรายละเอียดล่าสุด`,
+            kind: "workshop",
+            refId: workshop.id,
+            readAt: null,
+            createdAt: now(),
+          });
+        }
+      }
+    }
+    const changes = [];
+    for (const key of [
+      "users",
+      "workshops",
+      "registrations",
+      "complaints",
+      "ratings",
+      "notifications",
+    ]) {
+      for (const item of incoming[key]) {
+        const old = current[key].find((row) => row.id === item.id);
+        if (!equalJson(old, item))
+          changes.push({
+            id: require("node:crypto").randomUUID(),
+            actorId: user.id,
+            actorName: user.name,
+            action: old ? "update" : "create",
+            entity: key,
+            entityId: item.id,
+            createdAt: now(),
+          });
+      }
+    }
+    incoming.auditLog = [...changes, ...oldAudit];
     return incoming;
   }
   async function writeSnapshot(snapshot) {
@@ -512,12 +709,12 @@ module.exports = function createStore({
         w.title,
         w.description || "",
         w.cover || "",
-        w.start,
-        w.end,
+        workshopTimestamp(w.start),
+        workshopTimestamp(w.end),
         w.place,
         Number(w.capacity),
         Number(w.hours),
-        w.closed ? 1 : 0,
+        db.boolean(w.closed),
         w.createdAt || now(),
       );
     const upReg = db.prepare(
@@ -585,5 +782,6 @@ module.exports = function createStore({
     viewFromSnapshot,
     mergeSnapshot,
     writeSnapshot,
+    refreshSnapshot,
   };
 };

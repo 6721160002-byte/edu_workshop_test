@@ -2,11 +2,41 @@
 const crypto = require("node:crypto");
 const now = () => new Date().toISOString();
 const localDateInput = (value) => {
-  const d = new Date(value);
-  return new Date(d.getTime() - d.getTimezoneOffset() * 60000)
-    .toISOString()
-    .slice(0, 16);
+  if (
+    typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/.test(value)
+  )
+    return value.slice(0, 16);
+  const parts = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Asia/Bangkok",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(value));
+  const fields = Object.fromEntries(
+    parts.map((part) => [part.type, part.value]),
+  );
+  return `${fields.year}-${fields.month}-${fields.day}T${fields.hour}:${fields.minute}`;
 };
+const readJson = (value) =>
+  typeof value === "string" ? JSON.parse(value) : structuredClone(value);
+const isExpired = (value) =>
+  !Number.isFinite(new Date(value).getTime()) ||
+  new Date(value).getTime() <= Date.now();
+// datetime-local fields represent campus time, including on Vercel's UTC host.
+const workshopTime = (value) => {
+  const text = String(value);
+  return Date.parse(
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(text)
+      ? `${text}+07:00`
+      : text,
+  );
+};
+const workshopTimestamp = (value) =>
+  new Date(workshopTime(value)).toISOString();
 const uid = () => crypto.randomUUID();
 const hashToken = (value) =>
   crypto.createHash("sha256").update(value).digest("hex");
@@ -27,6 +57,14 @@ const passwordRecord = (
   salt = crypto.randomBytes(16).toString("hex"),
 ) => ({ salt, hash: crypto.scryptSync(password, salt, 64).toString("hex") });
 const verifyPassword = (password, salt, expected) => {
+  if (
+    typeof password !== "string" ||
+    password.length > 128 ||
+    typeof salt !== "string" ||
+    typeof expected !== "string" ||
+    !/^[a-f0-9]{128}$/i.test(expected)
+  )
+    return false;
   const actual = crypto.scryptSync(password, salt, 64);
   const digest = Buffer.from(expected, "hex");
   return (
@@ -53,6 +91,14 @@ function validNewPassword(password) {
 }
 function validCover(value) {
   if (!value) return true;
+  if (
+    typeof value === "string" &&
+    /^\/assets\/images\/[a-zA-Z0-9_.-]+\.(?:png|jpe?g|webp)$/.test(value)
+  ) {
+    return require("node:fs").existsSync(
+      require("node:path").join(__dirname, "../public", value),
+    );
+  }
   const m = /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/.exec(
     String(value),
   );
@@ -76,6 +122,10 @@ function validCover(value) {
 module.exports = {
   now,
   localDateInput,
+  readJson,
+  isExpired,
+  workshopTime,
+  workshopTimestamp,
   uid,
   hashToken,
   publicUser,

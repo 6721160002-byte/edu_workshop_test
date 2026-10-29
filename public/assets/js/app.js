@@ -4,7 +4,16 @@
   let apiCsrf = null,
     apiSaving = Promise.resolve(),
     apiSaveCount = 0,
+    apiSaveEpoch = 0,
     apiPollTimer = null;
+  let otpAvailable = false;
+  let syncMessage = "กำลังเชื่อมต่อ…";
+  function updateSync(message) {
+    syncMessage = message;
+    document.querySelectorAll("[data-sync-status]").forEach((el) => {
+      el.textContent = message;
+    });
+  }
   async function apiRequest(endpoint, options = {}) {
     const headers = new Headers(options.headers || {});
     if (options.body !== undefined && !headers.has("Content-Type"))
@@ -21,7 +30,10 @@
       payload = await response.json();
     } catch {}
     if (!response.ok)
-      throw new Error(payload.error || "เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ");
+      throw Object.assign(
+        new Error(payload.error || "เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ"),
+        { status: response.status },
+      );
     return payload;
   }
   function startApiPolling() {
@@ -30,11 +42,21 @@
       if (
         !apiCsrf ||
         apiSaveCount ||
+        document.activeElement?.matches?.("input, textarea, select") ||
         document.querySelector("#modal-root .dialog")
       )
         return;
       try {
+        const actor = state.userId;
         const latest = await apiRequest("/api/store");
+        updateSync(
+          "อัปเดตล่าสุด " +
+            new Date().toLocaleTimeString("th-TH", {
+              hour: "2-digit",
+              minute: "2-digit",
+            }),
+        );
+        if (state.userId !== actor || !apiCsrf) return;
         if (latest.store.revision > store.revision) {
           const source = store.workshops.map((w) => ({ ...w }));
           Object.assign(store, latest.store);
@@ -42,7 +64,14 @@
           overlayDemoImages();
           render();
         }
-      } catch {}
+      } catch (error) {
+        if (error.status === 401) {
+          apiCsrf = null;
+          state.userId = null;
+          render();
+          toast("เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง");
+        } else updateSync("เชื่อมต่อขัดข้อง · กำลังลองใหม่");
+      }
     }, 5000);
   }
   function overlayDemoImages() {
@@ -82,7 +111,7 @@
       Array.from(randomBytes(16), (b) => b.toString(16).padStart(2, "0")).join(
         "",
       );
-  const LOGO = "/assets/images/image-001.png";
+  const LOGO = "/assets/images/bsru-workshop-logo.png";
   const PHOTOS = {
     team: "/assets/images/image-002.jpg",
     code: "/assets/images/image-003.jpg",
@@ -387,6 +416,11 @@
       slide: 0,
       notificationFilter: "general",
       notificationQuery: "",
+      promoSlide: 0,
+      approvalQuery: "",
+      approvalStatus: "WAITING",
+      participantQuery: "",
+      participantStatus: "all",
     },
     ready = false,
     modalReturn = null,
@@ -405,22 +439,27 @@
       timeStyle: "short",
     });
   const occupancy = (id) =>
-    store.registrations.filter(
-      (r) => r.workshopId === id && r.status !== "CANCELLED",
-    ).length;
+    !staff() &&
+    Number.isFinite(store.workshops.find((w) => w.id === id)?.occupancy)
+      ? store.workshops.find((w) => w.id === id).occupancy
+      : store.registrations.filter(
+          (r) => r.workshopId === id && r.status !== "CANCELLED",
+        ).length;
   const scheduledPhase = (w) =>
     Date.now() < +new Date(w.start)
       ? "upcoming"
       : Date.now() <= +new Date(w.end)
         ? "ongoing"
         : "finished";
-  const phase = (w) => (w.closed ? "closed" : scheduledPhase(w));
+  const phase = (w) =>
+    w.cancelled ? "cancelled" : w.closed ? "closed" : scheduledPhase(w);
   const phaseLabel = (w) =>
     ({
       upcoming: "เร็วๆ นี้",
       ongoing: "ดำเนินการอยู่",
       finished: "เสร็จสิ้นแล้ว",
-      closed: "ปิดเวิร์กช็อปแล้ว",
+      closed: "ปิดรับสมัคร",
+      cancelled: "ยกเลิกกิจกรรม",
     })[phase(w)];
   function toast(msg) {
     clearTimeout(toastTimer);
@@ -430,37 +469,65 @@
   function commit(msg) {
     store.revision++;
     render();
-    if (msg) toast(msg);
     if (apiCsrf && state.userId) {
+      updateSync("กำลังบันทึก…");
       apiSaveCount++;
+      const epoch = apiSaveEpoch,
+        actor = state.userId;
       const snapshot = JSON.parse(JSON.stringify(store));
       apiSaving = apiSaving
         .then(() =>
-          apiRequest("/api/store", {
-            method: "POST",
-            body: JSON.stringify({ store: snapshot }),
-          }),
+          epoch === apiSaveEpoch && actor === state.userId
+            ? apiRequest("/api/store", {
+                method: "POST",
+                body: JSON.stringify({ store: snapshot }),
+              })
+            : null,
         )
         .then((result) => {
-          store.revision = result.revision;
+          if (result && epoch === apiSaveEpoch && actor === state.userId) {
+            store.revision = Math.max(store.revision, result.revision);
+            if (apiSaveCount === 1) {
+              Object.assign(store, result.store);
+              overlayDemoImages();
+              render();
+            }
+            updateSync(
+              "บันทึกแล้ว " +
+                new Date().toLocaleTimeString("th-TH", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                }),
+            );
+            if (msg) toast(msg);
+          }
         })
         .catch(async (error) => {
+          if (actor !== state.userId || epoch !== apiSaveEpoch) return;
+          apiSaveEpoch++;
+          updateSync("บันทึกไม่สำเร็จ · กำลังโหลดข้อมูลล่าสุด");
           toast(error.message);
           try {
             const latest = await apiRequest("/api/store");
+            if (actor !== state.userId) return;
             Object.assign(store, latest.store);
             overlayDemoImages();
             render();
-          } catch {}
+          } catch {
+            updateSync("เชื่อมต่อขัดข้อง · โปรดตรวจสอบก่อนทำรายการต่อ");
+          }
         })
         .finally(() => {
           apiSaveCount--;
         });
     }
+    return apiSaving;
   }
   const otpChallenges = new Map(),
-    otpLimits = new Map(),
     resetGrants = new Map();
+  const localDemo = ["localhost", "127.0.0.1", "[::1]"].includes(
+    window.location?.hostname,
+  );
   let currentChallenge = null;
   const passwordPolicy =
     "อย่างน้อย 12 ตัวอักษร มี A–Z, a–z, ตัวเลข และสัญลักษณ์ ไม่มีช่องว่าง";
@@ -494,7 +561,7 @@
   const number = (n) =>
     Number(n).toLocaleString("th-TH", { maximumFractionDigits: 2 });
   function workshopMeta(w) {
-    return `<div class="meta"><span><i class="fa-regular fa-calendar"></i>เริ่ม ${esc(fmt(w.start))}</span><span><i class="fa-regular fa-clock"></i>สิ้นสุด ${esc(fmt(w.end))}</span><span><i class="fa-solid fa-location-dot"></i>${esc(w.place)}</span><span><i class="fa-solid fa-users"></i>รับ ${w.capacity} คน · ลงทะเบียน ${occupancy(w.id)} คน</span><span><i class="fa-solid fa-hourglass-half"></i>จำนวนชั่วโมงอบรม <b>${number(w.hours)} ชั่วโมง</b></span></div>`;
+    return `<div class="meta"><span><i class="fa-regular fa-calendar"></i>เริ่ม ${esc(fmt(w.start))}</span><span><i class="fa-regular fa-clock"></i>สิ้นสุด ${esc(fmt(w.end))}</span><span><i class="fa-solid fa-location-dot"></i>${esc(w.place)}</span><span><i class="fa-solid fa-users"></i>เหลือ ${Math.max(0, w.capacity - occupancy(w.id))} จาก ${w.capacity} ที่นั่ง</span><span><i class="fa-solid fa-hourglass-half"></i>จำนวนชั่วโมงอบรม <b>${number(w.hours)} ชั่วโมง</b></span></div>`;
   }
 
   const input = (label, name, type = "text", extra = "") =>
@@ -521,12 +588,12 @@
             ["manage", "จัดการเวิร์กช็อป"],
             ["approvals", "อนุมัติผู้ใช้งาน"],
             ["participants", "ผู้เข้าร่วมอบรม"],
-            ["complaints", "คำร้องและความช่วยเหลือ"],
+            ["complaints", "แจ้งปัญหาและความช่วยเหลือ"],
           ]
         : [
             ["dashboard", "ภาพรวมของฉัน"],
             ["workshops", "ค้นหาเวิร์กช็อป"],
-            ["mine", "รายการของฉัน"],
+            ["mine", "กิจกรรมของฉัน"],
             ["reports", "ผลการอบรม"],
             ["notifications", "การแจ้งเตือน"],
             ["my-complaints", "คำร้องของฉัน"],
@@ -537,111 +604,287 @@
     const unread = u
       ? store.notifications.filter((n) => n.userId === u.id && !n.readAt).length
       : 0;
-    return `<a class="skip-link" href="#main-content">ข้ามไปยังเนื้อหา</a><div class="app-frame ${u ? "is-authenticated" : "is-public"}">
+    return `<a class="skip-link" href="#main-content">ข้ามไปยังเนื้อหา</a><div class="app-frame ${u ? "is-authenticated" : "is-public"} ${!u && !state.portal ? "is-role-selection" : ""}">
       <header class="nav"><div class="wrap navin">
-        <div class="brand"><div class="brandmark app-logo"><img src="${LOGO}" alt="ตรามหาวิทยาลัยราชภัฏบ้านสมเด็จเจ้าพระยา"></div><div><b>BSRU <span>Workshop<span class="brand-dot">.</span></span></b><div class="sub">พื้นที่แห่งการเรียนรู้และเติบโต</div></div></div>
+        <div class="brand"><div class="brandmark app-logo"><img src="${LOGO}" alt="BSRU Workshop"></div><div class="brand-copy"><b class="brand-title">BSRU <span>Workshop<span class="brand-dot">.</span></span></b><div class="brand-subtitle">ระบบจัดการอบรมและเวิร์กช็อป</div><div class="brand-institution">มหาวิทยาลัยราชภัฏบ้านสมเด็จเจ้าพระยา</div></div></div>
         ${u ? `<div class="workspace-label">พื้นที่ทำงาน <span>/</span> <b>${esc(active)}</b></div>` : '<span class="header-motto"><span class="status-dot"></span> เรียนรู้วันนี้ เติบโตได้ทุกวัน</span>'}
-        <div class="header-actions">${state.portal ? `<span class="role-pill ${a || state.portal === "staff" ? "staff-role" : ""}"><i class="fa-solid ${state.portal === "staff" ? "fa-shield-halved" : "fa-graduation-cap"}" aria-hidden="true"></i>${state.portal === "staff" ? "เจ้าหน้าที่" : "ผู้เรียน"}</span>` : ""}
+        <div class="header-actions">${u ? `<span class="role-pill ${a || state.portal === "staff" ? "staff-role" : ""}"><i class="fa-solid ${state.portal === "staff" ? "fa-shield-halved" : "fa-graduation-cap"}" aria-hidden="true"></i>${state.portal === "staff" ? "เจ้าหน้าที่" : "ผู้เรียน"}</span>` : ""}
+        ${!u && state.portal ? '<button class="btn small" data-action="switch">← เลือกกลุ่มผู้ใช้งานใหม่</button>' : ""}
         ${member() ? `<button class="btn icon-button" data-action="page" data-id="notifications" aria-label="การแจ้งเตือน ${unread} รายการที่ยังไม่อ่าน"><i class="fa-regular fa-bell" aria-hidden="true"></i>${unread ? '<span class="notification-dot"></span>' : ""}</button>` : ""}
-        ${u ? `<span class="header-avatar" aria-label="${esc(u.name)}">${esc(Array.from(u.name)[0])}</span><button class="btn icon-button mobile-action" data-action="switch" aria-label="เปลี่ยนบทบาท"><i class="fa-solid fa-repeat" aria-hidden="true"></i></button><button class="btn icon-button mobile-action" data-action="logout" aria-label="ออกจากระบบ"><i class="fa-solid fa-arrow-right-from-bracket" aria-hidden="true"></i></button>` : state.portal ? '<button class="btn small quiet" data-action="switch"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> เลือกบทบาทใหม่</button>' : ""}</div>
+        ${u ? `<span class="header-avatar" aria-label="${esc(u.name)}">${esc(Array.from(u.name)[0])}</span><button class="btn icon-button mobile-action" data-action="logout" aria-label="ออกจากระบบ"><i class="fa-solid fa-arrow-right-from-bracket" aria-hidden="true"></i></button>` : ""}</div>
       </div></header>
       ${
         u
           ? `<aside class="sidebar"><div class="sidebar-label">${a ? "จัดการพื้นที่การเรียนรู้" : "พื้นที่การเรียนรู้ของคุณ"}</div><nav class="side-nav" aria-label="เมนูหลัก">${nav.map(([id, label]) => `<button data-action="page" data-id="${id}" class="${state.page === id ? "active" : ""}" ${state.page === id ? 'aria-current="page"' : ""}><i class="fa-solid ${icons[id]}" aria-hidden="true"></i><span>${label}</span>${id === "approvals" && store.users.some((x) => x.status === "WAITING") ? `<span class="nav-count">${store.users.filter((x) => x.status === "WAITING").length}</span>` : id === "notifications" && unread ? `<span class="nav-count">${unread}</span>` : ""}</button>`).join("")}</nav>
         <div class="sidebar-note"><span class="note-spark"><i class="fa-solid fa-sparkles fa-star" aria-hidden="true"></i></span><b>ก้าวเล็ก ๆ สู่โอกาสใหม่</b><p>ทุกการเรียนรู้ คืออีกก้าวของการเติบโต</p>${member() ? '<button class="btn small" data-action="page" data-id="workshops">สำรวจเวิร์กช็อป <span aria-hidden="true">↗</span></button>' : '<span class="sub">สร้างประสบการณ์ที่ดีไปด้วยกัน</span>'}</div>
-        <div class="sidebar-bottom">${member() ? '<button data-action="support"><i class="fa-regular fa-circle-question" aria-hidden="true"></i> แจ้งปัญหาการใช้งาน</button>' : ""}<button data-action="switch"><i class="fa-solid fa-repeat" aria-hidden="true"></i> เปลี่ยนบทบาท</button><div class="profile-card"><span class="profile-avatar">${esc(Array.from(u.name)[0])}</span><div><b>${esc(u.name)}</b><span>${a ? "เจ้าหน้าที่ดูแลระบบ" : "สมาชิก BSRU Workshop"}</span></div><button data-action="logout" aria-label="ออกจากระบบ"><i class="fa-solid fa-arrow-right-from-bracket" aria-hidden="true"></i></button></div></div>
+        <div class="sidebar-bottom">${member() ? '<button data-action="support"><i class="fa-regular fa-circle-question" aria-hidden="true"></i> แจ้งปัญหาการใช้งาน</button>' : ""}<button data-action="switch"><i class="fa-solid fa-repeat" aria-hidden="true"></i> เปลี่ยนบัญชี</button><div class="profile-card"><span class="profile-avatar">${esc(Array.from(u.name)[0])}</span><div><b>${esc(u.name)}</b><span>${a ? "เจ้าหน้าที่ดูแลระบบ" : "สมาชิก BSRU Workshop"}</span></div><button data-action="logout" aria-label="ออกจากระบบ"><i class="fa-solid fa-arrow-right-from-bracket" aria-hidden="true"></i></button></div></div>
       </aside>`
           : ""
       }
       <main id="main-content" class="wrap main" tabindex="-1"><div class="page-stage">${content}</div><footer class="foot"><span>BSRU Workshop<span class="brand-dot">.</span></span><span>เรียนรู้ · สร้างสรรค์ · เติบโตไปด้วยกัน</span><span>มหาวิทยาลัยราชภัฏบ้านสมเด็จเจ้าพระยา</span></footer></main></div>`;
   }
-  function selector() {
-    return `<section class="portal"><div class="portal-intro"><span class="welcome-pill"><span class="status-dot"></span> YOUR NEXT CHAPTER STARTS HERE</span><h1>การเรียนรู้ที่ดี<br>เริ่มต้นที่<span>โอกาสใหม่</span><span class="heading-dot">.</span></h1><p class="portal-description">ค้นพบสิ่งที่คุณสนใจ เติมทักษะที่คุณต้องการ<br>พร้อมเติบโตไปด้วยกันในชุมชน BSRU</p><div class="portal-photo"><img src="${PHOTOS.team}" alt="บรรยากาศการเรียนรู้และแลกเปลี่ยนความคิดเห็น" fetchpriority="high"><div class="photo-caption"><span class="photo-caption-icon"><i class="fa-solid fa-graduation-cap" aria-hidden="true"></i></span><div><b>พื้นที่ของทุกความเป็นไปได้</b><span>เรียนรู้สิ่งใหม่ ในแบบของคุณ</span></div><span class="photo-arrow" aria-hidden="true">↗</span></div></div><div class="portal-values"><span><i class="fa-regular fa-compass" aria-hidden="true"></i> ค้นพบทักษะใหม่</span><span><i class="fa-regular fa-calendar-check" aria-hidden="true"></i> จัดการง่ายในที่เดียว</span><span><i class="fa-solid fa-seedling" aria-hidden="true"></i> เติบโตไปด้วยกัน</span></div></div>
-      <div class="portal-options"><div class="portal-options-heading"><span class="eyebrow">WELCOME TO BSRU WORKSHOP</span><h2>เริ่มต้นในพื้นที่ของคุณ</h2><p class="muted">เลือกบทบาทที่ต้องการเข้าใช้งาน</p></div><div class="choices"><button class="panel choice learner-choice" data-action="portal" data-id="user"><div class="choice-heading"><span class="choice-icon"><i class="fa-solid fa-user-graduate" aria-hidden="true"></i></span><span class="choice-index">01 / LEARN & GROW</span><span class="choice-arrow" aria-hidden="true">↗</span></div><h2>สำหรับผู้เรียน</h2><p>ค้นหาเวิร์กช็อป ลงทะเบียนเข้าร่วม<br>และติดตามทุกก้าวของการเรียนรู้</p><span class="choice-link">เข้าสู่พื้นที่ผู้เรียน <span aria-hidden="true">→</span></span></button><button class="panel choice staff-choice" data-action="portal" data-id="staff"><div class="choice-heading"><span class="choice-icon"><i class="fa-solid fa-sliders" aria-hidden="true"></i></span><span class="choice-index">02 / MANAGE & CONNECT</span><span class="choice-arrow" aria-hidden="true">↗</span></div><h2>สำหรับเจ้าหน้าที่</h2><p>สร้างกิจกรรม ดูแลผู้เข้าร่วม<br>และจัดการงานอบรมได้อย่างเป็นระบบ</p><span class="choice-link">เข้าสู่พื้นที่เจ้าหน้าที่ <span aria-hidden="true">→</span></span></button></div><div class="portal-help"><i class="fa-solid fa-circle-info" aria-hidden="true"></i><span>นักศึกษาและอาจารย์ เลือก “สำหรับผู้เรียน”</span></div></div></section>`;
+  function promotionItems() {
+    const upcoming = store.workshops
+      .filter(
+        (w) => !w.closed && !w.cancelled && scheduledPhase(w) === "upcoming",
+      )
+      .sort((a, b) => new Date(a.start) - new Date(b.start));
+    return upcoming.length
+      ? upcoming
+      : [
+          {
+            id: "welcome",
+            title: "พื้นที่แห่งการเรียนรู้และโอกาสใหม่",
+            description: "ติดตามเวิร์กช็อปที่กำลังจะเปิดรับสมัครเร็ว ๆ นี้",
+            cover: PHOTOS.team,
+            place: "BSRU Workshop",
+          },
+        ];
   }
-  function carousel() {
-    if (!store.workshops.length) return "";
-    const w = store.workshops[state.slide % store.workshops.length];
-    return `<section class="hero">${w.cover ? `<img class="hero-feature-image" src="${esc(w.cover)}" alt="" loading="lazy">` : ""}<div class="eyebrow">WORKSHOP HIGHLIGHT · ${esc(w.category || "BSRU LEARNING")}</div><h1>${esc(w.title)}</h1><p>${esc(w.description || "เสริมทักษะใหม่ เปิดโอกาสใหม่ไปกับเวิร์กช็อป BSRU")}</p>${workshopMeta(w)}<div class="carousel-controls" aria-label="เลือกกิจกรรมประชาสัมพันธ์"><button data-action="slide" data-id="prev" aria-label="กิจกรรมก่อนหน้า">←</button>${store.workshops.map((_, i) => `<button class="${i === state.slide % store.workshops.length ? "active" : ""}" data-action="slide" data-id="${i}" aria-label="กิจกรรมที่ ${i + 1}">${i + 1}</button>`).join("")}<button data-action="slide" data-id="next" aria-label="กิจกรรมถัดไป">→</button></div></section>`;
+  function loginPromo(a) {
+    const items = promotionItems();
+    const index =
+      ((state.promoSlide % items.length) + items.length) % items.length;
+    const item = items[index];
+    const fallback = item.id === "welcome";
+    const date = fallback
+      ? "เร็ว ๆ นี้"
+      : new Date(item.start).toLocaleDateString("th-TH", {
+          day: "numeric",
+          month: "long",
+          year: "numeric",
+        });
+    return `<div class="login-promo" data-promo-swipe="true" aria-label="ประชาสัมพันธ์เวิร์กช็อป เลื่อนเพื่อดูรายการอื่น"><img class="login-promo-image" src="${esc(item.cover || PHOTOS.team)}" alt="${esc(item.title)}" draggable="false"><div class="login-promo-shade"></div><div class="login-promo-content"><div class="login-promo-top"><span class="login-promo-kicker">${fallback ? "BSRU WORKSHOP" : "UPCOMING WORKSHOP"}</span><span class="login-promo-count">${index + 1} / ${items.length}</span></div><img class="login-promo-logo" src="${LOGO}" alt="ตรา BSRU"><div class="login-promo-copy"><h1>${esc(item.title)}</h1><p>${esc(item.description || "เปิดประสบการณ์ใหม่ เติมทักษะ และเติบโตไปกับชุมชน BSRU")}</p><div class="login-promo-meta"><span><i class="fa-regular fa-calendar" aria-hidden="true"></i> ${date}</span>${!fallback && item.place ? `<span><i class="fa-solid fa-location-dot" aria-hidden="true"></i> ${esc(item.place)}</span>` : ""}</div></div><div class="login-promo-bottom"><span><i class="fa-solid fa-graduation-cap" aria-hidden="true"></i> เปิดโอกาสใหม่ไปด้วยกัน</span><span class="login-promo-hint">ปัดหรือเลื่อนเพื่อดูเพิ่มเติม</span></div></div><div class="login-promo-controls"><button type="button" data-action="promo-slide" data-id="prev" aria-label="ประชาสัมพันธ์ก่อนหน้า">←</button>${items.map((_, i) => `<button type="button" data-action="promo-slide" data-id="${i}" class="${i === index ? "active" : ""}" aria-label="ประชาสัมพันธ์รายการที่ ${i + 1}"></button>`).join("")}<button type="button" data-action="promo-slide" data-id="next" aria-label="ประชาสัมพันธ์ถัดไป">→</button></div></div>`;
+  }
+  function selector() {
+    return `<section class="portal role-selector" aria-labelledby="role-page-title">
+  <div class="portal-intro">
+    <span class="role-eyebrow"><span aria-hidden="true"></span> BSRU WORKSHOP</span>
+    <h1 id="role-page-title">ทุกการเรียนรู้<br>เริ่มต้นที่<span>โอกาสใหม่</span></h1>
+    <p class="portal-description">พื้นที่สำหรับค้นพบเวิร์กช็อป พัฒนาทักษะ<br class="role-desktop-break"> และติดตามการเรียนรู้ของคุณในที่เดียว</p>
+    <div class="portal-photo"><img src="${PHOTOS.team}" alt="ผู้เข้าร่วมแลกเปลี่ยนความรู้และทำกิจกรรมร่วมกัน" fetchpriority="high"><div class="role-photo-caption"><span class="role-photo-mark" aria-hidden="true">✦</span><span>เรียนรู้วันนี้ ต่อยอดได้ทุกวัน</span></div></div>
+    <p class="role-brand-note">เรียนรู้ · เชื่อมต่อ · เติบโตไปด้วยกัน</p>
+  </div>
+  <div class="portal-options">
+    <div class="portal-options-heading"><span class="role-step">เริ่มต้นใช้งาน</span><h2>เลือกพื้นที่ของคุณ</h2><p class="muted">เลือกกลุ่มผู้ใช้งานเพื่อเข้าสู่ระบบ</p></div>
+    <div class="choices">
+      <button type="button" class="panel choice learner-choice" data-action="portal" data-id="user" aria-labelledby="learner-role-title" aria-describedby="learner-role-description">
+        <div class="choice-heading"><span class="choice-icon"><i class="fa-solid fa-user-graduate" aria-hidden="true"></i></span><span class="role-card-label">สำหรับผู้เข้าร่วมอบรม</span><span class="role-number" aria-hidden="true">01</span></div>
+        <h3 id="learner-role-title">นักศึกษา / อาจารย์ / เจ้าหน้าที่</h3>
+        <p id="learner-role-description">ค้นหาเวิร์กช็อป ลงทะเบียนเข้าร่วม<br>และติดตามชั่วโมงอบรมสะสม</p>
+        <span class="choice-link">เข้าสู่ระบบผู้เข้าร่วม <span aria-hidden="true">→</span></span>
+      </button>
+      <button type="button" class="panel choice staff-choice" data-action="portal" data-id="staff" aria-labelledby="admin-role-title" aria-describedby="admin-role-description">
+        <div class="choice-heading"><span class="choice-icon"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i></span><span class="role-card-label">สำหรับผู้ดูแลระบบ</span><span class="role-number" aria-hidden="true">02</span></div>
+        <h3 id="admin-role-title">เจ้าหน้าที่ (แอดมิน)</h3>
+        <p id="admin-role-description">จัดการกิจกรรม อนุมัติบัญชีผู้ใช้งาน<br>และดูแลรายชื่อผู้เข้าร่วมอบรม</p>
+        <span class="choice-link">เข้าสู่ระบบแอดมิน <span aria-hidden="true">→</span></span>
+      </button>
+    </div>
+    <p class="portal-help"><i class="fa-solid fa-circle-info" aria-hidden="true"></i><span>เจ้าหน้าที่ที่ต้องการเข้าร่วมอบรม เลือกกลุ่มผู้เข้าร่วม</span></p>
+  </div>
+</section>`;
+  }
+  function loginWithPromo() {
+    const a = state.portal === "staff";
+    return login().replace(
+      /<div class="intro">[\s\S]*?<\/div><\/div><section class="form">/,
+      `<div class="intro">${loginPromo(a)}</div><section class="form">`,
+    );
   }
   function login() {
     const a = state.portal === "staff";
-    return `<section class="login"><div class="intro"><img class="login-cover" src="${PHOTOS.team}" alt=""><div class="login-copy"><img class="login-logo" src="${LOGO}" alt="โลโก้แอป BSRU Workshop"><div class="eyebrow" style="color:#ffcc89">${a ? "MANAGE & CONNECT" : "YOUR NEXT CHAPTER"}</div><h1>${a ? "จัดการทุกกิจกรรม<br>ได้ในพื้นที่เดียว" : "ทักษะใหม่<br>โอกาสใหม่ เริ่มที่นี่"}</h1><p>${a ? "ดูแลเวิร์กช็อปและผู้เข้าร่วม พร้อมเชื่อมต่อข้อมูลถึงผู้ใช้งานทันที" : "ค้นพบเวิร์กช็อปที่ใช่ พัฒนาศักยภาพของคุณไปกับชุมชน BSRU"}</p><div class="row space login-promise"><i class="fa-solid fa-graduation-cap" aria-hidden="true"></i><span>LEARNING NEVER STOPS.</span></div></div></div><section class="form"><div class="eyebrow">BSRU WORKSHOP</div><h2>ยินดีต้อนรับ${a ? "เจ้าหน้าที่" : "กลับมา"} 👋</h2><p class="muted">เข้าสู่ระบบ${a ? "สำหรับเจ้าหน้าที่" : "เพื่อเริ่มต้นการเรียนรู้"}</p><form id="login-form">${input("อีเมล หรือ เบอร์โทรศัพท์", "identity", "text", 'autocomplete="username" placeholder="กรอกอีเมลหรือเบอร์โทรศัพท์"')}${input("รหัสผ่าน", "password", "password", 'autocomplete="current-password" minlength="6" placeholder="กรอกรหัสผ่าน"')}<div class="error" id="login-error" role="alert"></div><button class="btn primary login-submit" ${!ready ? "disabled" : ""}>เข้าสู่ระบบ <span aria-hidden="true">→</span></button></form>${!a ? `<p class="login-register">ยังไม่มีบัญชี? <button class="btn small" data-action="register">สมัครใช้งานใหม่</button></p>` : ""}<button class="btn login-forgot" data-action="forgot"><i class="fa-solid fa-key" aria-hidden="true"></i> ลืมรหัสผ่าน</button><details class="demo"><summary><i class="fa-solid fa-flask" aria-hidden="true"></i> บัญชีสำหรับทดลองใช้งาน</summary><div class="demo-content">${a ? "admin1@bsru.ac.th / 0899990001" : "std_demo@bsru.ac.th / 0812345678<br>staff_demo@bsru.ac.th (อาจารย์)"}<br>รหัสผ่านเริ่มต้น: <b>123456</b><br><span class="sub">หากเปลี่ยนรหัสผ่านแล้ว ให้ใช้รหัสผ่านล่าสุด</span>${!ready ? "<br>กำลังเตรียมระบบเข้าสู่ระบบ…" : ""}</div></details></section></section>`;
+    return `<section class="login"><div class="intro"><img class="login-cover" src="${PHOTOS.team}" alt=""><div class="login-copy"><img class="login-logo" src="${LOGO}" alt="โลโก้แอป BSRU Workshop"><div class="eyebrow" style="color:#ffcc89">${a ? "MANAGE & CONNECT" : "YOUR NEXT CHAPTER"}</div><h1>${a ? "จัดการทุกกิจกรรม<br>ได้ในพื้นที่เดียว" : "ทักษะใหม่<br>โอกาสใหม่ เริ่มที่นี่"}</h1><p>${a ? "ดูแลเวิร์กช็อปและผู้เข้าร่วม พร้อมเชื่อมต่อข้อมูลถึงผู้ใช้งานทันที" : "ค้นพบเวิร์กช็อปที่ใช่ พัฒนาศักยภาพของคุณไปกับชุมชน BSRU"}</p><div class="row space login-promise"><i class="fa-solid fa-graduation-cap" aria-hidden="true"></i><span>LEARNING NEVER STOPS.</span></div></div></div><section class="form"><div class="eyebrow">BSRU WORKSHOP</div><h2>ยินดีต้อนรับ${a ? "เจ้าหน้าที่" : "กลับมา"} 👋</h2><p class="muted">เข้าสู่ระบบ${a ? "สำหรับเจ้าหน้าที่" : "เพื่อเริ่มต้นการเรียนรู้"}</p><form id="login-form">${input("อีเมล หรือ เบอร์โทรศัพท์", "identity", "text", 'autocomplete="username" placeholder="กรอกอีเมลหรือเบอร์โทรศัพท์"')}${input("รหัสผ่าน", "password", "password", 'autocomplete="current-password" minlength="6" placeholder="กรอกรหัสผ่าน"')}<div class="error" id="login-error" role="alert"></div><button class="btn primary login-submit" ${!ready ? "disabled" : ""}>เข้าสู่ระบบ <span aria-hidden="true">→</span></button></form>${!a && otpAvailable ? `<p class="login-register">ยังไม่มีบัญชี? <button class="btn small" data-action="register">สมัครใช้งานใหม่</button></p>` : ""}${otpAvailable ? '<button class="btn login-forgot" data-action="forgot">ลืมรหัสผ่าน</button>' : '<div class="notice space">ระบบสำหรับสมาชิกที่ได้รับอนุมัติ หากต้องการบัญชีหรือกู้รหัสผ่าน กรุณาติดต่อเจ้าหน้าที่ผู้ดูแลระบบ</div>'}${localDemo ? `<details class="demo"><summary><i class="fa-solid fa-flask" aria-hidden="true"></i> บัญชีสำหรับทดลองใช้งาน</summary><div class="demo-content">${a ? "admin1@bsru.ac.th / 0899990001" : "std_demo@bsru.ac.th / 0812345678<br>staff_demo@bsru.ac.th (อาจารย์)"}<br>รหัสผ่านเริ่มต้น: <b>123456</b><br><span class="sub">หากเปลี่ยนรหัสผ่านแล้ว ให้ใช้รหัสผ่านล่าสุด</span>${!ready ? "<br>กำลังเตรียมระบบเข้าสู่ระบบ…" : ""}</div></details>` : ""}</section></section>`;
   }
   function title(eyebrow, heading, desc, action = "") {
     return `<div class="row between page-heading"><div><div class="eyebrow">${eyebrow}</div><h1>${heading}</h1><p class="muted" style="margin:0">${desc}</p></div>${action}</div>`;
   }
-  function summaryCharts(regs) {
-    const statuses = [
-        ["PENDING", "#e0a529"],
-        ["ATTENDED", "#01b287"],
-        ["ABSENT", "#e5505a"],
-        ["CANCELLED", "#9295a5"],
-      ],
-      total = regs.length;
-    let at = 0;
-    const segments = statuses.map(([key, color]) => {
-      const from = at;
-      at += total
-        ? (regs.filter((r) => r.status === key).length / total) * 100
-        : 0;
-      return `${color} ${from}% ${at}%`;
-    });
-    const months = Array.from({ length: 6 }, (_, i) => {
-        const d = new Date();
-        d.setDate(1);
-        d.setMonth(d.getMonth() - 5 + i);
-        const hours = regs
-          .filter((r) => {
-            const t = new Date(r.updatedAt);
-            return (
-              t.getMonth() === d.getMonth() &&
-              t.getFullYear() === d.getFullYear()
-            );
-          })
-          .reduce((n, r) => n + hoursOf(r), 0);
-        return {
-          label: d.toLocaleDateString("th-TH", { month: "short" }),
-          full: d.toLocaleDateString("th-TH", {
-            month: "long",
-            year: "numeric",
-          }),
-          hours,
-        };
-      }),
-      max = Math.max(1, ...months.map((x) => x.hours));
-    return `<div class="chart-grid space"><section class="panel"><h3>สัดส่วนสถานะการลงทะเบียน</h3><p class="muted" style="font-size:12px">${total} รายการ ตามช่วงเวลาที่เลือก</p><div class="row" style="gap:25px"><div class="donut" aria-hidden="true" style="background:${total ? `conic-gradient(${segments.join(",")})` : "#eceaf0"}"><strong>${total}<small>รายการทั้งหมด</small></strong></div><div class="legend">${statuses
-      .map(([key, color]) => {
-        const n = regs.filter((r) => r.status === key).length;
-        return `<div class="legend-line"><span class="legend-dot" style="background:${color}"></span><span>${labels[key]}</span><strong>${n} <small>(${total ? Math.round((n / total) * 100) : 0}%)</small></strong></div>`;
-      })
-      .join(
-        "",
-      )}</div></div>${!total ? '<p class="chart-note">ยังไม่มีข้อมูลในช่วงเวลานี้ ลองเลือก “ทั้งหมด”</p>' : ""}</section><section class="panel"><h3>ชั่วโมงอบรมที่ยืนยันแล้ว</h3><p class="muted" style="font-size:12px">6 เดือนล่าสุด · นับตามเดือนที่อัปเดตสถานะ</p><div class="month-chart" role="img" aria-label="${esc(months.map((m) => m.full + " " + number(m.hours) + " ชั่วโมง").join(", "))}">${months.map((m) => `<div class="month-column" title="${esc(m.full)}: ${number(m.hours)} ชั่วโมง"><strong>${number(m.hours)}</strong><div class="bar" style="height:${(m.hours / max) * 100}px;opacity:${m.hours ? 1 : 0.25}"></div><small>${esc(m.label)}</small></div>`).join("")}</div><p class="chart-note">หน่วย: ชั่วโมง · นับเฉพาะสถานะ “เข้าร่วมงานแล้ว” ภายใต้ช่วงเวลาที่เลือก</p></section></div>`;
+  function workshopDetail(id) {
+    const w = store.workshops.find((item) => item.id === id);
+    if (!w) return;
+    const registered = store.registrations.some(
+      (r) => r.workshopId === id && r.status !== "CANCELLED",
+    );
+    openModal(
+      esc(w.title),
+      '<p class="activity-description">' +
+        esc(
+          w.description ||
+            "ยังไม่มีรายละเอียดเพิ่มเติม กรุณาติดต่อผู้จัดกิจกรรม",
+        ) +
+        "</p>" +
+        workshopMeta(w) +
+        '<p class="notice">ชั่วโมงอบรมจะได้รับเมื่อเจ้าหน้าที่ยืนยันการเข้าร่วมแล้ว</p>' +
+        (member() &&
+        !registered &&
+        phase(w) === "upcoming" &&
+        occupancy(id) < w.capacity
+          ? '<button class="btn primary space" data-action="enroll" data-id="' +
+            w.id +
+            '">ลงทะเบียนกิจกรรมนี้</button>'
+          : '<p class="muted">' +
+            (registered ? "คุณลงทะเบียนกิจกรรมนี้แล้ว" : phaseLabel(w)) +
+            "</p>"),
+    );
   }
-  function dashboard() {
-    const u = user(),
-      a = staff();
-    let regs = a
-      ? store.registrations
-      : store.registrations.filter((r) => r.userId === u.id);
-    if (state.period !== "all") {
-      const now = new Date(),
-        start = new Date(now);
-      start.setHours(0, 0, 0, 0);
-      if (state.period === "week")
-        start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
-      if (state.period === "month") start.setDate(1);
-      regs = regs.filter(
-        (r) => new Date(r.updatedAt) >= start && new Date(r.updatedAt) <= now,
-      );
+  function learnerDashboard() {
+    const regs = store.registrations.filter((r) => r.userId === state.userId);
+    const upcoming = regs
+      .filter((r) => r.status === "PENDING")
+      .map((r) => store.workshops.find((w) => w.id === r.workshopId))
+      .filter((w) => w && new Date(w.end) > new Date())
+      .sort((a, b) => new Date(a.start) - new Date(b.start));
+    const next = upcoming[0];
+    const unread = store.notifications.filter(
+      (n) => n.userId === state.userId && !n.readAt,
+    ).length;
+    return (
+      title(
+        "พื้นที่การเรียนรู้",
+        "สวัสดี, " + esc(user().name),
+        "กิจกรรมและสิ่งที่ต้องทำของคุณ",
+        '<span class="sync" data-sync-status role="status">' +
+          esc(syncMessage) +
+          "</span>",
+      ) +
+      '<section class="panel next-activity"><span class="eyebrow">กิจกรรมถัดไปของฉัน</span>' +
+      (next
+        ? "<h2>" +
+          esc(next.title) +
+          "</h2>" +
+          workshopMeta(next) +
+          '<button class="btn primary" data-action="workshop-detail" data-id="' +
+          next.id +
+          '">ดูรายละเอียดกิจกรรม</button>'
+        : '<h2>ยังไม่มีกิจกรรมที่กำลังจะเข้าร่วม</h2><p class="muted">เลือกกิจกรรมที่สนใจเพื่อเริ่มต้นการเรียนรู้</p><button class="btn primary" data-action="page" data-id="workshops">ค้นหากิจกรรม</button>') +
+      "</section>" +
+      '<div class="grid three space"><section class="panel"><h3>กำลังจะเข้าร่วม</h3><strong class="metric">' +
+      upcoming.length +
+      '</strong><p>กิจกรรม</p></section><section class="panel"><h3>ชั่วโมงสะสม</h3><strong class="metric">' +
+      number(regs.reduce((sum, r) => sum + hoursOf(r), 0)) +
+      '</strong><p>ยืนยันการเข้าร่วมแล้ว</p></section><section class="panel"><h3>สิ่งที่ต้องตรวจสอบ</h3><p>แจ้งเตือนที่ยังไม่อ่าน ' +
+      unread +
+      ' รายการ</p><button class="btn" data-action="page" data-id="notifications">ดูการแจ้งเตือน</button></section></div>' +
+      '<div class="row between space"><h2>กิจกรรมที่เปิดรับสมัคร</h2><button class="btn" data-action="page" data-id="workshops">ดูทั้งหมด</button></div><div class="grid three space">' +
+      (store.workshops
+        .filter((w) => phase(w) === "upcoming" && occupancy(w.id) < w.capacity)
+        .sort((a, b) => new Date(a.start) - new Date(b.start))
+        .slice(0, 3)
+        .map(card)
+        .join("") || empty("ยังไม่มีกิจกรรมเปิดรับสมัคร")) +
+      "</div>"
+    );
+  }
+  function staffDashboard() {
+    const registrations = store.registrations,
+      openWorkshops = store.workshops.filter(
+        (w) => !w.closed && (phase(w) === "upcoming" || phase(w) === "ongoing"),
+      ),
+      waitingUsers = store.users.filter((x) => x.status === "WAITING"),
+      openComplaints = store.complaints.filter((x) => x.status === "OPEN"),
+      statusItems = [
+        ["PENDING", "รอเข้าร่วม", "#e4a52b"],
+        ["ATTENDED", "เข้าร่วมแล้ว", "#23b486"],
+        ["ABSENT", "ไม่เข้าร่วม", "#e66b78"],
+        ["CANCELLED", "ยกเลิก", "#9895aa"],
+      ],
+      counts = statusItems.map(([key, label, color]) => ({
+        key,
+        label,
+        color,
+        count: registrations.filter((r) => r.status === key).length,
+      })),
+      total = registrations.length,
+      segments = counts.reduce(
+        (parts, item) => {
+          const start = parts.end;
+          const end = start + (total ? (item.count / total) * 100 : 0);
+          parts.items.push(`${item.color} ${start}% ${end}%`);
+          parts.end = end;
+          return parts;
+        },
+        { items: [], end: 0 },
+      ),
+      upcoming = store.workshops
+        .filter((w) => phase(w) === "upcoming" || phase(w) === "ongoing")
+        .sort((a, b) => new Date(a.start) - new Date(b.start))
+        .slice(0, 6),
+      trendMode =
+        state.period === "day"
+          ? "day"
+          : state.period === "week"
+            ? "week"
+            : "month",
+      trend = [],
+      now = new Date();
+
+    if (trendMode === "day") {
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(now);
+        d.setHours(0, 0, 0, 0);
+        d.setDate(d.getDate() - i);
+        const next = new Date(d);
+        next.setDate(next.getDate() + 1);
+        trend.push({
+          label: d.toLocaleDateString("th-TH", { weekday: "short" }),
+          value: registrations.filter((r) => {
+            const t = new Date(r.createdAt);
+            return t >= d && t < next;
+          }).length,
+        });
+      }
+    } else if (trendMode === "week") {
+      for (let i = 7; i >= 0; i--) {
+        const d = new Date(now);
+        d.setHours(0, 0, 0, 0);
+        d.setDate(d.getDate() - ((d.getDay() + 6) % 7) - i * 7);
+        const next = new Date(d);
+        next.setDate(next.getDate() + 7);
+        trend.push({
+          label: d.toLocaleDateString("th-TH", {
+            day: "numeric",
+            month: "short",
+          }),
+          value: registrations.filter((r) => {
+            const t = new Date(r.createdAt);
+            return t >= d && t < next;
+          }).length,
+        });
+      }
+    } else {
+      for (let i = 5; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const next = new Date(d.getFullYear(), d.getMonth() + 1, 1);
+        trend.push({
+          label: d.toLocaleDateString("th-TH", { month: "short" }),
+          value: registrations.filter((r) => {
+            const t = new Date(r.createdAt);
+            return t >= d && t < next;
+          }).length,
+        });
+      }
     }
-    const totalHours = regs.reduce((sum, r) => sum + hoursOf(r), 0);
-    return `<div class="dashboard">${!a ? carousel() : ""}${title(a ? "STAFF OVERVIEW" : "MY LEARNING SPACE", a ? "ภาพรวมการจัดอบรม" : `สวัสดี, ${esc(u.name)}`, a ? "ติดตามการลงทะเบียน การเข้าร่วม และชั่วโมงอบรมในหน้าเดียว" : "ดูสถานะกิจกรรมและชั่วโมงอบรมของคุณได้จากที่นี่", `<span class="sync">อัปเดตล่าสุด · ${store.revision}</span>`)}<div class="toolbar"><span class="muted">ช่วงเวลาที่อัปเดตข้อมูล</span><div class="tabs">${[
+    const maxTrend = Math.max(1, ...trend.map((x) => x.value));
+    const statCard = (label, value, icon, tone, page, caption) =>
+      `<button class="staff-stat-card" data-action="page" data-id="${page}" style="--staff-stat:${tone}"><span class="staff-stat-icon"><i class="fa-solid ${icon}" aria-hidden="true"></i></span><span class="staff-stat-copy"><small>${label}</small><strong>${number(value)}</strong><em>${caption}</em></span><span class="staff-stat-arrow" aria-hidden="true">↗</span></button>`;
+    const table = upcoming.length
+      ? upcoming
+          .map(
+            (w) =>
+              `<tr><td><strong>${esc(w.title)}</strong><span>${esc(w.place || "ไม่ระบุสถานที่")}</span></td><td>${esc(new Date(w.start).toLocaleDateString("th-TH", { day: "numeric", month: "short", year: "numeric" }))}</td><td><strong>${number(occupancy(w.id))}</strong> / ${number(w.capacity)} คน</td><td>${badge(phase(w))}</td><td><button class="btn small" data-action="page" data-id="manage">จัดการ</button></td></tr>`,
+          )
+          .join("")
+      : `<tr><td colspan="5"><div class="staff-empty"><i class="fa-regular fa-calendar-xmark"></i><strong>ยังไม่มีกิจกรรมที่กำลังจะมาถึง</strong><span>เมื่อมีเวิร์กช็อปใหม่ รายการจะแสดงที่นี่</span></div></td></tr>`;
+    const trendBars = trend
+      .map(
+        (item) =>
+          `<div class="staff-trend-item" title="${esc(item.label)}: ${number(item.value)} คน"><strong>${number(item.value)}</strong><div class="staff-trend-bar"><i style="height:${(item.value / maxTrend) * 100}%"></i></div><small>${esc(item.label)}</small></div>`,
+      )
+      .join("");
+    return `<div class="staff-dashboard"><div class="staff-dashboard-head"><div>${title("STAFF OVERVIEW", "ภาพรวมการอบรม", "ติดตามกิจกรรม ผู้ลงทะเบียน และงานที่ต้องดำเนินการจากข้อมูลล่าสุด")}</div><div class="staff-dashboard-meta"><span class="live-dot"></span> สถานะการเชื่อมต่อ <span class="sync" data-sync-status role="status">${esc(syncMessage)}</span></div></div><div class="toolbar staff-period-toolbar"><span class="muted">ช่วงข้อมูลแนวโน้มการลงทะเบียน</span><div class="tabs">${[
       ["day", "วัน"],
       ["week", "สัปดาห์"],
       ["month", "เดือน"],
-      ["all", "ทั้งหมด"],
     ]
       .map(
         ([v, l]) =>
@@ -649,27 +892,7 @@
       )
       .join(
         "",
-      )}</div></div><div class="panel hours-summary"><div><div class="eyebrow">CONFIRMED LEARNING HOURS</div><h2>${a ? "ชั่วโมงอบรมรวมผู้เข้าร่วม" : "ชั่วโมงอบรมสะสมของฉัน"}</h2><p class="muted" style="margin-bottom:0">ยืนยันแล้ว ${regs.filter((r) => r.status === "ATTENDED").length} รายการ จากทั้งหมด ${regs.length} รายการ</p></div><strong>${number(totalHours)}<small> ชั่วโมง</small></strong></div><div class="grid four space">${[
-      ["PENDING", "#d19722", "fa-hourglass-half"],
-      ["ATTENDED", "#01b287", "fa-circle-check"],
-      ["ABSENT", "#e5505a", "fa-circle-xmark"],
-      ["CANCELLED", "#898c9f", "fa-ban"],
-    ]
-      .map(
-        ([key, color, icon]) =>
-          `<div class="panel stat" style="--stat-color:${color}"><div class="row between"><span class="muted">${labels[key]}</span><i class="fa-solid ${icon}" style="color:${color}"></i></div><strong>${regs.filter((r) => r.status === key).length}</strong><span class="sub">รายการ</span></div>`,
-      )
-      .join("")}</div>${summaryCharts(regs)}${
-      a
-        ? `<div class="grid three space"><div class="panel"><h3>เวิร์กช็อปทั้งหมด</h3><h1>${store.workshops.length}</h1><button class="btn small" data-action="page" data-id="manage">จัดการเวิร์กช็อป →</button></div><div class="panel"><h3>ผู้ใช้งานรออนุมัติ</h3><h1>${store.users.filter((u) => u.status === "WAITING").length}</h1><button class="btn small" data-action="page" data-id="approvals">ตรวจสอบคำขอ →</button></div><div class="panel"><h3>คำร้องเรียนที่ยังไม่ปิด</h3><h1>${store.complaints.filter((c) => c.status === "OPEN").length}</h1><button class="btn small" data-action="page" data-id="complaints">ดูคำร้องเรียน →</button></div></div><div class="panel space"><h3>ผลประเมินขั้นตอนการลงทะเบียน</h3><p>จำนวน ${store.ratings.length} ความเห็น · คะแนนเฉลี่ย ${store.ratings.length ? number(store.ratings.reduce((n, r) => n + r.score, 0) / store.ratings.length) : "—"} / 5</p></div>`
-        : `<div class="row between space"><h2>เวิร์กช็อปที่น่าสนใจ</h2><button class="btn small" data-action="page" data-id="workshops">ดูทั้งหมด →</button></div><div class="grid three space">${
-            store.workshops
-              .filter((w) => phase(w) === "upcoming" || phase(w) === "ongoing")
-              .slice(0, 3)
-              .map(card)
-              .join("") || empty("ยังไม่มีเวิร์กช็อปเปิดรับ")
-          }</div>`
-    }</div>`;
+      )}</div></div><div class="staff-stat-grid">${statCard("เวิร์กช็อปที่เปิดรับ", openWorkshops.length, "fa-calendar-check", "#854c9e", "manage", "กิจกรรมที่ยังเปิดรับสมัคร")}${statCard("จำนวนผู้ลงทะเบียน", registrations.filter((r) => r.status !== "CANCELLED").length, "fa-users", "#d98b30", "participants", "รายการที่ยังไม่ยกเลิก")}${statCard("ผู้ใช้งานรออนุมัติ", waitingUsers.length, "fa-user-clock", "#e4a52b", "approvals", "บัญชีที่รอตรวจสอบ")}${statCard("คำร้องที่รอดำเนินการ", openComplaints.length, "fa-comments", "#c85d77", "complaints", "คำร้องสถานะเปิด")}</div><div class="staff-dashboard-grid"><section class="panel staff-table-panel"><div class="staff-panel-heading"><div><span class="eyebrow">UPCOMING WORKSHOPS</span><h2>กิจกรรมที่กำลังจะมาถึง</h2><p class="muted">แสดงกิจกรรมตามวันเริ่มต้นและจำนวนที่นั่งล่าสุด</p></div><button class="btn small" data-action="page" data-id="manage">ดูทั้งหมด <span aria-hidden="true">→</span></button></div><div class="staff-table-wrap"><table class="staff-table"><thead><tr><th>กิจกรรม</th><th>วันที่</th><th>ผู้ลงทะเบียน / ที่นั่ง</th><th>สถานะ</th><th></th></tr></thead><tbody>${table}</tbody></table></div></section><section class="panel staff-donut-panel"><div class="staff-panel-heading"><div><span class="eyebrow">REGISTRATION STATUS</span><h2>สถานะผู้ลงทะเบียน</h2><p class="muted">รวมทั้งหมด ${number(total)} รายการ</p></div></div><div class="staff-donut-wrap"><div class="staff-donut" style="background:${total ? `conic-gradient(${segments.items.join(",")})` : "#ebe8f0"}"><strong>${number(total)}<small>รายการ</small></strong></div><div class="staff-legend">${counts.map((item) => `<div><span><i style="background:${item.color}"></i>${item.label}</span><strong>${number(item.count)}<small>${total ? Math.round((item.count / total) * 100) : 0}%</small></strong></div>`).join("")}</div></div>${!total ? '<p class="staff-empty-note">ยังไม่มีข้อมูลการลงทะเบียนในระบบ</p>' : ""}</section></div><section class="panel staff-trend-panel"><div class="staff-panel-heading"><div><span class="eyebrow">REGISTRATION TREND</span><h2>แนวโน้มจำนวนผู้ลงทะเบียน</h2><p class="muted">หน่วย: คน · นับจากวันที่สร้างรายการลงทะเบียน</p></div><span class="staff-trend-current">${trendMode === "day" ? "รายวัน" : trendMode === "week" ? "รายสัปดาห์" : "รายเดือน"}</span></div><div class="staff-trend-chart">${trendBars}</div>${registrations.length ? "" : '<div class="staff-empty"><i class="fa-solid fa-chart-line"></i><strong>ยังไม่มีข้อมูลแนวโน้ม</strong><span>เมื่อมีการลงทะเบียน กราฟจะแสดงตามช่วงเวลาที่เลือก</span></div>'}</section></div>`;
   }
 
   function card(w) {
@@ -679,14 +902,65 @@
       n = occupancy(w.id),
       a = staff(),
       available = phase(w) === "upcoming" && n < w.capacity;
-    return `<article class="card"><div class="cover">${w.cover ? `<img src="${esc(w.cover)}" alt="ภาพประกอบ ${esc(w.title)}" loading="lazy">` : `<i class="fa-solid ${esc(w.icon || "fa-graduation-cap")}"></i>`}<span class="tag">${esc(w.category || "BSRU WORKSHOP")}</span></div><div class="cardbody">${w.photoSource ? `<a class="photo-credit" href="${esc(w.photoSource.url)}" target="_blank" rel="noopener">ภาพประกอบ: ${esc(w.photoSource.credit)}</a>` : ""}<div class="row between"><span class="badge phase-${phase(w)}">${phaseLabel(w)}</span>${r ? badge(r.status) : ""}</div><h3 style="margin-top:14px;min-height:50px">${esc(w.title)}</h3>${workshopMeta(w)}<div class="row between" style="font-size:11px"><span class="muted">จำนวนผู้ลงทะเบียน</span><b>${n} / ${w.capacity} ที่นั่ง</b></div><div class="progress"><span style="width:${Math.min(100, (n / w.capacity) * 100)}%"></span></div>${a ? `<button class="btn primary" style="width:100%" data-action="participants-for" data-id="${w.id}">จัดการผู้เข้าร่วม</button><div class="row space"><button class="btn small" data-action="edit-workshop" data-id="${w.id}">แก้ไขกิจกรรม</button>${!w.closed && scheduledPhase(w) !== "finished" ? `<button class="btn small danger" data-action="close-workshop" data-id="${w.id}">ปิดเวิร์กช็อป</button>` : ""}</div>` : r && r.status !== "CANCELLED" ? `<button class="btn" style="width:100%" data-action="page" data-id="reports">ดูผลการลงทะเบียน →</button>` : `<button class="btn primary" style="width:100%" data-action="enroll" data-id="${w.id}" ${!available ? "disabled" : ""}>${!available ? (n >= w.capacity ? "ที่นั่งเต็ม" : "ปิดรับลงทะเบียน") : r ? "ลงทะเบียนอีกครั้ง" : "ลงทะเบียนเวิร์กช็อป"} &nbsp; →</button>`}</div></article>`;
+    return `<article class="card"><div class="cover">${w.cover ? `<img src="${esc(w.cover)}" alt="ภาพประกอบ ${esc(w.title)}" loading="lazy">` : `<i class="fa-solid ${esc(w.icon || "fa-graduation-cap")}"></i>`}<span class="tag">${esc(w.category || "BSRU WORKSHOP")}</span></div><div class="cardbody">${w.photoSource ? `<a class="photo-credit" href="${esc(w.photoSource.url)}" target="_blank" rel="noopener">ภาพประกอบ: ${esc(w.photoSource.credit)}</a>` : ""}<div class="row between"><span class="badge phase-${phase(w)}">${phaseLabel(w)}</span>${r ? badge(r.status) : ""}</div><h3 style="margin-top:14px;min-height:50px"><button class="activity-title" data-action="workshop-detail" data-id="${w.id}">${esc(w.title)}</button></h3>${workshopMeta(w)}<div class="row between" style="font-size:11px"><span class="muted">จำนวนผู้ลงทะเบียน</span><b>${n} / ${w.capacity} ที่นั่ง</b></div><div class="progress"><span style="width:${Math.min(100, (n / w.capacity) * 100)}%"></span></div>${a ? `<button class="btn primary" style="width:100%" data-action="participants-for" data-id="${w.id}">จัดการผู้เข้าร่วม</button><div class="row space"><button class="btn small" data-action="edit-workshop" data-id="${w.id}">แก้ไขกิจกรรม</button>${!w.closed && scheduledPhase(w) !== "finished" ? `<button class="btn small danger" data-action="close-workshop" data-id="${w.id}">ปิดเวิร์กช็อป</button>` : ""}</div>` : r && r.status !== "CANCELLED" ? `<button class="btn" style="width:100%" data-action="page" data-id="mine">ดูกิจกรรมของฉัน →</button>` : `<button class="btn primary" style="width:100%" data-action="enroll" data-id="${w.id}" ${!available ? "disabled" : ""}>${!available ? (n >= w.capacity ? "ที่นั่งเต็ม" : "ปิดรับลงทะเบียน") : r ? "ลงทะเบียนอีกครั้ง" : "ลงทะเบียนเวิร์กช็อป"} &nbsp; →</button>`}</div></article>`;
   }
   function empty(msg) {
     return `<div class="panel empty"><i class="fa-regular fa-folder-open"></i>${esc(msg)}</div>`;
   }
+  function downloadCsv(filename, rows) {
+    const csv = rows
+      .map((row) =>
+        row
+          .map((value) => `"${String(value ?? "").replaceAll('"', '""')}"`)
+          .join(","),
+      )
+      .join("\r\n");
+    const url = URL.createObjectURL(
+      new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }),
+    );
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+  function managementTable(list) {
+    return (
+      '<div class="panel tablewrap"><table><thead><tr><th>กิจกรรม</th><th>วันเริ่ม</th><th>ผู้สมัคร / ที่นั่ง</th><th>สถานะ</th><th>จัดการ</th></tr></thead><tbody>' +
+      list
+        .map(
+          (w) =>
+            '<tr><td><button class="activity-title" data-action="workshop-detail" data-id="' +
+            w.id +
+            '">' +
+            esc(w.title) +
+            "</button></td><td>" +
+            esc(fmt(w.start)) +
+            "</td><td>" +
+            occupancy(w.id) +
+            " / " +
+            w.capacity +
+            "</td><td>" +
+            phaseLabel(w) +
+            '</td><td><div class="staff-row-actions"><button class="btn small primary" data-action="participants-for" data-id="' +
+            w.id +
+            '">ผู้เข้าร่วม</button><button class="btn small" data-action="edit-workshop" data-id="' +
+            w.id +
+            '">แก้ไข</button>' +
+            (!w.closed && scheduledPhase(w) !== "finished"
+              ? '<button class="btn small danger" data-action="close-workshop" data-id="' +
+                w.id +
+                '">ปิดรับสมัคร</button>'
+              : "") +
+            "</div></td></tr>",
+        )
+        .join("") +
+      "</tbody></table></div>"
+    );
+  }
   function workshops() {
     const a = staff();
-    const list = store.workshops.filter(
+    let list = store.workshops.filter(
       (w) =>
         (state.filter === "all" || phase(w) === state.filter) &&
         (!state.search ||
@@ -694,12 +968,52 @@
             .toLowerCase()
             .includes(state.search.toLowerCase())) &&
         (a ||
-          state.view === "open" ||
-          store.registrations.some(
-            (r) => r.workshopId === w.id && r.userId === state.userId,
-          )),
+          (state.view === "open" &&
+            (state.filter !== "all" ||
+              (phase(w) === "upcoming" && occupancy(w.id) < w.capacity))) ||
+          (state.view === "mine" &&
+            store.registrations.some(
+              (r) => r.workshopId === w.id && r.userId === state.userId,
+            ))),
     );
-    return `${title(a ? "WORKSHOP MANAGEMENT" : "EXPLORE & REGISTER", a ? "จัดการเวิร์กช็อป" : state.view === "mine" ? "รายการของฉัน" : "ค้นพบเวิร์กช็อปที่ใช่", a ? "กิจกรรมที่สร้างจะปรากฏในฝั่งผู้ใช้งานทันที" : "เลือกกิจกรรมเพื่อพัฒนาทักษะและเปิดประสบการณ์ใหม่", a ? '<button class="btn primary" data-action="add-workshop"><i class="fa-solid fa-plus"></i> เพิ่มเวิร์กช็อป</button>' : "")}${!a ? `<div class="tabs space"><button data-action="view" data-id="open" class="${state.view === "open" ? "active" : ""}">เปิดรับลงทะเบียน</button><button data-action="view" data-id="mine" class="${state.view === "mine" ? "active" : ""}">หน้ารายการของฉัน</button></div>` : ""}<div class="toolbar"><input id="search" aria-label="ค้นหาเวิร์กช็อป" placeholder="ค้นหาชื่อเวิร์กช็อป หรือสถานที่…" value="${esc(state.search)}"><select id="phase-filter" aria-label="สถานะกิจกรรม">${[
+    if (state.page === "mine" && state.mineStatus && state.mineStatus !== "all")
+      list = list.filter((w) => {
+        const r = store.registrations.find(
+          (row) => row.workshopId === w.id && row.userId === state.userId,
+        );
+        return state.mineStatus === "upcoming"
+          ? r?.status === "PENDING"
+          : state.mineStatus === "finished"
+            ? ["ATTENDED", "ABSENT"].includes(r?.status)
+            : r?.status === "CANCELLED";
+      });
+    if (state.dateFrom)
+      list = list.filter((w) => w.start.slice(0, 10) >= state.dateFrom);
+    if (state.dateTo)
+      list = list.filter((w) => w.start.slice(0, 10) <= state.dateTo);
+    return `${title(a ? "WORKSHOP MANAGEMENT" : "EXPLORE & REGISTER", a ? "จัดการเวิร์กช็อป" : state.view === "mine" ? "กิจกรรมของฉัน" : "ค้นพบเวิร์กช็อปที่ใช่", a ? "กิจกรรมที่สร้างจะปรากฏในฝั่งผู้ใช้งานทันที" : "เลือกกิจกรรมเพื่อพัฒนาทักษะและเปิดประสบการณ์ใหม่", a ? '<button class="btn primary" data-action="add-workshop"><i class="fa-solid fa-plus"></i> เพิ่มเวิร์กช็อป</button>' : "")}${
+      state.page === "mine"
+        ? '<div class="tabs space" aria-label="สถานะการเข้าร่วม">' +
+          [
+            ["all", "ทั้งหมด"],
+            ["upcoming", "รอเข้าร่วม"],
+            ["finished", "เสร็จสิ้น"],
+            ["cancelled", "ยกเลิก"],
+          ]
+            .map(
+              ([id, label]) =>
+                '<button data-action="mine-status" data-id="' +
+                id +
+                '" class="' +
+                ((state.mineStatus || "all") === id ? "active" : "") +
+                '">' +
+                label +
+                "</button>",
+            )
+            .join("") +
+          "</div>"
+        : ""
+    }<div class="toolbar"><input id="search" aria-label="ค้นหาเวิร์กช็อป" placeholder="ค้นหาชื่อเวิร์กช็อป หรือสถานที่…" value="${esc(state.search)}"><select id="phase-filter" aria-label="สถานะกิจกรรม">${[
       ["all", "ทั้งหมด"],
       ["upcoming", "เร็วๆ นี้"],
       ["ongoing", "ดำเนินการอยู่"],
@@ -712,7 +1026,18 @@
       )
       .join(
         "",
-      )}</select><span class="muted">${list.length} กิจกรรม</span></div><div class="grid three">${list.map(card).join("")}</div>${!list.length ? empty("ไม่พบเวิร์กช็อปที่ตรงกับตัวกรอง") : ""}`;
+      )}</select><label class="date-filter">ตั้งแต่ <input id="date-from" type="date" value="${esc(state.dateFrom || "")}"></label><label class="date-filter">ถึง <input id="date-to" type="date" value="${esc(state.dateTo || "")}"></label><span class="muted">${list.length} กิจกรรม</span></div>${
+      a
+        ? managementTable(
+            list.sort((a, b) => new Date(a.start) - new Date(b.start)),
+          )
+        : '<div class="grid three">' +
+          list
+            .sort((a, b) => new Date(a.start) - new Date(b.start))
+            .map(card)
+            .join("") +
+          "</div>"
+    }${!list.length ? empty("ไม่พบเวิร์กช็อปที่ตรงกับตัวกรอง") : ""}`;
   }
   function reports() {
     const regs = store.registrations.filter((r) => r.userId === state.userId);
@@ -726,25 +1051,44 @@
       empty("ยังไม่มีรายการลงทะเบียน เริ่มต้นได้ที่หน้าเวิร์กช็อป")
     }</div>`;
   }
-  function approvals() {
-    const list = store.users.filter((u) => u.role === "user");
-    return `${title("USER APPROVAL", "อนุมัติผู้ใช้งาน", "ตรวจสอบข้อมูลผู้สมัครใหม่และอนุมัติสิทธิ์เข้าสู่ระบบ")}<div class="panel space tablewrap"><table><thead><tr><th>ผู้สมัคร</th><th>ประเภท / รหัสประจำตัว</th><th>ช่องทางติดต่อ</th><th>คณะ / สาขา</th><th>สถานะ / จัดการ</th></tr></thead><tbody>${list.map((u) => `<tr><td><b>${esc(u.name)}</b></td><td>${esc(u.type)}<br>${esc(u.code)}</td><td>${esc(u.email || "—")}<br>${esc(u.phone || "—")}</td><td>${esc(u.faculty)}<br><span class="muted">${esc(u.major || "—")}</span></td><td>${badge(u.status)}${u.status === "WAITING" ? `<br><button class="btn small primary" data-action="approve" data-id="${u.id}">อนุมัติสิทธิ์</button>` : ""}</td></tr>`).join("")}</tbody></table></div>`;
-  }
   let participantWorkshop = "all";
-  function participants() {
-    const list = store.registrations.filter(
-      (r) =>
-        participantWorkshop === "all" || r.workshopId === participantWorkshop,
+  function approvalsV2() {
+    const query = state.approvalQuery.toLowerCase();
+    const list = store.users.filter(
+      (u) =>
+        u.role === "user" &&
+        (state.approvalStatus === "all" || u.status === state.approvalStatus) &&
+        (!query ||
+          `${u.name} ${u.code} ${u.email} ${u.phone}`
+            .toLowerCase()
+            .includes(query)),
     );
-    return `${title("PARTICIPANT LIST", "รายชื่อผู้เข้าร่วมอบรม", "เลือกเวิร์กช็อปเพื่อดูรายชื่อและบันทึกการเข้าร่วม")}<div class="toolbar"><select id="participant-filter" aria-label="เลือกเวิร์กช็อป"><option value="all">ทุกเวิร์กช็อป</option>${store.workshops.map((w) => `<option value="${w.id}" ${participantWorkshop === w.id ? "selected" : ""}>${esc(w.title)}</option>`).join("")}</select></div>${
+    return `${title("USER APPROVAL", "อนุมัติผู้ใช้งาน", "ตรวจสอบข้อมูลผู้สมัครใหม่ก่อนเปิดสิทธิ์เข้าใช้งาน")}<div class="staff-work-toolbar"><input id="approval-search" type="search" aria-label="ค้นหาผู้สมัคร" placeholder="ค้นหาชื่อ รหัส หรืออีเมล" value="${esc(state.approvalQuery)}"><select id="approval-status" aria-label="กรองสถานะ"><option value="WAITING" ${state.approvalStatus === "WAITING" ? "selected" : ""}>รออนุมัติ</option><option value="APPROVED" ${state.approvalStatus === "APPROVED" ? "selected" : ""}>อนุมัติแล้ว</option><option value="REJECTED" ${state.approvalStatus === "REJECTED" ? "selected" : ""}>ปฏิเสธแล้ว</option><option value="all" ${state.approvalStatus === "all" ? "selected" : ""}>ทั้งหมด</option></select><span class="muted">${number(list.length)} รายการ</span></div><div class="panel space tablewrap"><table><thead><tr><th>ผู้สมัคร</th><th>ประเภท / รหัส</th><th>ช่องทางติดต่อ</th><th>คณะ / สาขา</th><th>สถานะ / จัดการ</th></tr></thead><tbody>${list.map((u) => `<tr><td><b>${esc(u.name)}</b></td><td>${esc(u.type)}<br>${esc(u.code)}</td><td>${esc(u.email || "—")}<br>${esc(u.phone || "—")}</td><td>${esc(u.faculty)}<br><span class="muted">${esc(u.major || "—")}</span></td><td>${badge(u.status)}${u.status === "WAITING" ? `<div class="staff-row-actions"><button class="btn small primary" data-action="approve" data-id="${u.id}">อนุมัติ</button><button class="btn small danger" data-action="reject" data-id="${u.id}">ปฏิเสธ</button></div>` : ""}</td></tr>`).join("") || `<tr><td colspan="5">${empty("ไม่พบผู้สมัครที่ตรงกับตัวกรอง")}</td></tr>`}</tbody></table></div>`;
+  }
+  function participantsV2() {
+    const query = state.participantQuery.toLowerCase();
+    const list = store.registrations.filter((r) => {
+      const u = store.users.find((x) => x.id === r.userId);
+      return (
+        (participantWorkshop === "all" ||
+          r.workshopId === participantWorkshop) &&
+        (state.participantStatus === "all" ||
+          r.status === state.participantStatus) &&
+        (!query ||
+          `${u?.name || ""} ${u?.code || ""} ${u?.email || ""}`
+            .toLowerCase()
+            .includes(query))
+      );
+    });
+    return `${title("PARTICIPANT LIST", "รายชื่อผู้เข้าร่วมอบรม", "ค้นหา กรอง และบันทึกผลการเข้าร่วมจากรายการจริง")}<div class="staff-work-toolbar"><select id="participant-filter" aria-label="เลือกเวิร์กช็อป"><option value="all">ทุกเวิร์กช็อป</option>${store.workshops.map((w) => `<option value="${w.id}" ${participantWorkshop === w.id ? "selected" : ""}>${esc(w.title)}</option>`).join("")}</select><input id="participant-search" type="search" aria-label="ค้นหาผู้เข้าร่วม" placeholder="ค้นหาชื่อหรือรหัสนักศึกษา" value="${esc(state.participantQuery)}"><select id="participant-status" aria-label="กรองสถานะ"><option value="all" ${state.participantStatus === "all" ? "selected" : ""}>ทุกสถานะ</option><option value="PENDING" ${state.participantStatus === "PENDING" ? "selected" : ""}>รอเข้าร่วม</option><option value="ATTENDED" ${state.participantStatus === "ATTENDED" ? "selected" : ""}>เข้าร่วมแล้ว</option><option value="ABSENT" ${state.participantStatus === "ABSENT" ? "selected" : ""}>ไม่เข้าร่วม</option><option value="CANCELLED" ${state.participantStatus === "CANCELLED" ? "selected" : ""}>ยกเลิก</option></select><button class="btn small" data-action="export-participants"><i class="fa-solid fa-download" aria-hidden="true"></i> Export CSV</button></div>${
       list.length
-        ? `<div class="panel tablewrap"><table><thead><tr><th>ลำดับ</th><th>ชื่อ-นามสกุล</th><th>รหัสประจำตัว</th><th>สถานะการเข้าร่วม</th><th>เช็กชื่อ</th></tr></thead><tbody>${list
+        ? `<div class="panel tablewrap"><table><thead><tr><th>ลำดับ</th><th>ชื่อ-นามสกุล</th><th>รหัสประจำตัว</th><th>สถานะ</th><th>เช็กชื่อ</th></tr></thead><tbody>${list
             .map((r, i) => {
-              const u = store.users.find((u) => u.id === r.userId);
-              return `<tr><td>${i + 1}</td><td><b>${esc(u.name)}</b></td><td>${esc(u.code)}</td><td>${badge(r.status)}</td><td>${r.status !== "CANCELLED" ? `<button class="btn small primary" data-action="attend" data-id="${r.id}">เข้าร่วมงาน</button><button class="btn small danger" data-action="absent" data-id="${r.id}">ไม่ได้เข้าร่วม</button>` : "ผู้ใช้ยกเลิกแล้ว"}</td></tr>`;
+              const u = store.users.find((x) => x.id === r.userId);
+              return `<tr><td>${i + 1}</td><td><b>${esc(u?.name || "ไม่พบข้อมูล")}</b></td><td>${esc(u?.code || "—")}</td><td>${badge(r.status)}</td><td>${r.status !== "CANCELLED" ? `<button class="btn small primary" data-action="attend" data-id="${r.id}">เข้าร่วมงาน</button><button class="btn small danger" data-action="absent" data-id="${r.id}">ไม่เข้าร่วม</button>` : "ผู้ใช้ยกเลิกแล้ว"}</td></tr>`;
             })
             .join("")}</tbody></table></div>`
-        : empty("ยังไม่มีรายชื่อในเวิร์กช็อปนี้")
+        : empty("ยังไม่มีรายชื่อที่ตรงกับตัวกรอง")
     }`;
   }
   const complaintStatus = (c) =>
@@ -843,14 +1187,14 @@
       `<div class="notification-empty"><span class="notification-empty-icon"><i class="fa-solid fa-bell-slash" aria-hidden="true"></i></span><h2>${state.notificationQuery ? "ไม่พบรายการที่ค้นหา" : "ยังไม่มีการแจ้งเตือน"}</h2><p>${state.notificationQuery ? "ลองค้นหาด้วยคำอื่น" : "เมื่อมีข่าวสารหรืออัปเดตจากเวิร์กช็อป รายการจะแสดงที่นี่"}</p>${state.notificationQuery ? '<button class="btn small" data-action="clear-notification-search">ล้างคำค้นหา</button>' : ""}</div>`
     }</div></section>`;
   }
-  function readNotification(id) {
+  async function readNotification(id) {
     if (!member()) return;
     const n = store.notifications.find(
       (n) => n.id === id && n.userId === state.userId,
     );
     if (!n) return;
     n.readAt = n.readAt || new Date().toISOString();
-    render();
+    await commit();
     const c =
       n.kind === "complaint"
         ? store.complaints.find(
@@ -882,16 +1226,46 @@
     if (resolve) resolve(answer);
   }
   let previousView = null;
+  let restoringNavigation = false;
+  const routePages = [
+    "dashboard",
+    "workshops",
+    "mine",
+    "reports",
+    "notifications",
+    "my-complaints",
+    "manage",
+    "approvals",
+    "participants",
+    "complaints",
+  ];
+  const requestedPage = () => {
+    const page = window.location?.hash?.slice(1);
+    return routePages.includes(page) ? page : "dashboard";
+  };
+  window.addEventListener?.("popstate", () => {
+    if (!user()) return;
+    restoringNavigation = true;
+    state.page = requestedPage();
+    state.view = state.page === "mine" ? "mine" : "open";
+    render();
+    restoringNavigation = false;
+  });
   function render() {
     let content;
     if (!state.portal) content = selector();
-    else if (!user()) content = login();
-    else if (state.page === "dashboard") content = dashboard();
+    else if (!user())
+      content = state.portal === "staff" ? login() : loginWithPromo();
+    else if (state.page === "dashboard")
+      content = staff() ? staffDashboard() : learnerDashboard();
     else if (staff())
       content = (
-        { manage: workshops, approvals, participants, complaints }[
-          state.page
-        ] || dashboard
+        {
+          manage: workshops,
+          approvals: approvalsV2,
+          participants: participantsV2,
+          complaints,
+        }[state.page] || learnerDashboard
       )();
     else if (state.page === "mine") {
       state.view = "mine";
@@ -900,7 +1274,7 @@
       content = (
         { workshops, reports, notifications, "my-complaints": myComplaints }[
           state.page
-        ] || dashboard
+        ] || learnerDashboard
       )();
     const view = [state.portal, state.userId, state.page].join(":");
     const changed = view !== previousView;
@@ -912,6 +1286,16 @@
         window.scrollTo({ top: 0, behavior: "auto" });
         $("#main-content")?.focus({ preventScroll: true });
       }
+    }
+    if (
+      user() &&
+      changed &&
+      !restoringNavigation &&
+      window.history?.pushState
+    ) {
+      const hash = "#" + state.page;
+      if (window.location.hash !== hash)
+        window.history.pushState(null, "", hash);
     }
     previousView = view;
   }
@@ -934,6 +1318,10 @@
   }
   function registerModal() {
     if (state.portal !== "user" || user()) return;
+    if (!otpAvailable)
+      return toast(
+        "การสมัครออนไลน์ยังไม่เปิดให้บริการ กรุณาติดต่อเจ้าหน้าที่ผู้ดูแลระบบ",
+      );
     openModal(
       "สมัครใช้งานใหม่",
       `<p class="muted">ยืนยันช่องทางติดต่อด้วย OTP แล้วรอเจ้าหน้าที่อนุมัติสิทธิ์</p><form id="register-form">${input("ชื่อ-นามสกุล", "name", "text", 'maxlength="120"')}<div class="grid two"><div class="field"><label for="type">ประเภทผู้ใช้งาน</label><select id="type" name="type"><option>นักศึกษา</option><option>อาจารย์</option></select></div>${input("รหัสประจำตัว", "code", "text", 'maxlength="30"')}</div><div class="field"><label for="faculty">คณะ / วิทยาลัย</label><select id="faculty" name="faculty" required><option value="">เลือกคณะ / วิทยาลัย</option>${Object.keys(
@@ -950,6 +1338,10 @@
   }
   function forgotModal() {
     if (!state.portal || user()) return;
+    if (!otpAvailable)
+      return toast(
+        "การกู้รหัสผ่านออนไลน์ยังไม่เปิดให้บริการ กรุณาติดต่อเจ้าหน้าที่ผู้ดูแลระบบ",
+      );
     openModal(
       "ลืมรหัสผ่าน",
       `<p class="muted">เลือกช่องทางที่ผูกกับบัญชี ${state.portal === "staff" ? "เจ้าหน้าที่" : "ผู้ใช้"} เพื่อรับ OTP แล้วตั้งรหัสผ่านใหม่</p><div class="notice">โหมดสาธิต: OTP จะแสดงในกล่องข้อความของแอป ไม่มีการส่งอีเมลหรือ SMS จริง</div><form id="forgot-form" class="space"><div class="field"><label for="recovery-channel">รับ OTP ผ่าน</label><select id="recovery-channel" name="channel"><option value="email">อีเมล</option><option value="phone">เบอร์โทรศัพท์</option></select></div>${input("อีเมลหรือเบอร์โทรศัพท์ที่ผูกกับบัญชี", "reset-contact", "text", 'autocomplete="email tel" maxlength="150"')}<div class="error" role="alert"></div><button class="btn primary">รับ OTP</button></form><p class="sub">บัญชีสาธิต: ผู้ใช้ 0812345678 · อาจารย์ 0899990002 · เจ้าหน้าที่ 0899990001</p>`,
@@ -1038,6 +1430,21 @@
     const w = store.workshops.find((w) => w.id === id);
     if (!w || phase(w) !== "upcoming" || occupancy(id) >= w.capacity)
       return toast("กิจกรรมปิดรับหรือที่นั่งเต็มแล้ว");
+    if (apiSaveCount) return toast("กำลังบันทึกรายการก่อนหน้า กรุณารอสักครู่");
+    const conflict = store.registrations.find((r) => {
+      const event = store.workshops.find((x) => x.id === r.workshopId);
+      return (
+        r.workshopId !== id &&
+        r.status !== "CANCELLED" &&
+        event &&
+        new Date(w.start) < new Date(event.end) &&
+        new Date(event.start) < new Date(w.end)
+      );
+    });
+    if (conflict)
+      return toast(
+        "เวลาตรงกับกิจกรรมที่ลงทะเบียนไว้แล้ว กรุณาตรวจสอบกิจกรรมของฉัน",
+      );
     let r = store.registrations.find(
       (r) => r.workshopId === id && r.userId === state.userId,
     );
@@ -1062,14 +1469,32 @@
       store.registrations.push(r);
     }
     closeModal();
-    commit("ลงทะเบียนสำเร็จ รายชื่อส่งถึงเจ้าหน้าที่แล้ว");
-    ratingModal(r.id);
+    return commit("ลงทะเบียนสำเร็จ ตรวจสอบได้ที่กิจกรรมของฉัน");
   }
   function clearRecovery() {
     otpChallenges.clear();
     resetGrants.clear();
     currentChallenge = null;
   }
+  let promoPointerStart = null;
+  document.addEventListener("pointerdown", (e) => {
+    if (e.target.closest("[data-promo-swipe]")) promoPointerStart = e.clientX;
+  });
+  document.addEventListener("pointerup", (e) => {
+    if (promoPointerStart === null) return;
+    const delta = e.clientX - promoPointerStart;
+    promoPointerStart = null;
+    if (Math.abs(delta) < 45) return;
+    const total = promotionItems().length;
+    state.promoSlide =
+      delta < 0
+        ? (state.promoSlide + 1) % total
+        : (state.promoSlide - 1 + total) % total;
+    render();
+  });
+  document.addEventListener("pointercancel", () => {
+    promoPointerStart = null;
+  });
   document.addEventListener("click", async (e) => {
     const b = e.target.closest("[data-action]");
     if (!b || b.disabled) return;
@@ -1078,6 +1503,15 @@
     if (a === "answer-yes" || a === "answer-no")
       return finishConfirm(a === "answer-yes");
     if (pendingConfirm) return;
+    if (a === "notification-go") {
+      closeModal();
+      state.page = id === "my-complaints" ? "my-complaints" : "reports";
+      return render();
+    }
+    if (a === "mine-status") {
+      state.mineStatus = id;
+      return render();
+    }
     if (a === "notification-read") return readNotification(id);
     if (a === "notification-filter" && member()) {
       state.notificationFilter = ["general", "activity"].includes(id)
@@ -1088,6 +1522,46 @@
     if (a === "clear-notification-search") {
       state.notificationQuery = "";
       return render();
+    }
+    if (a === "export-participants" && staff()) {
+      const query = state.participantQuery.toLowerCase();
+      const rows = store.registrations
+        .filter((r) => {
+          const u = store.users.find((x) => x.id === r.userId);
+          return (
+            (participantWorkshop === "all" ||
+              r.workshopId === participantWorkshop) &&
+            (state.participantStatus === "all" ||
+              r.status === state.participantStatus) &&
+            (!query ||
+              `${u?.name || ""} ${u?.code || ""} ${u?.email || ""}`
+                .toLowerCase()
+                .includes(query))
+          );
+        })
+        .map((r) => {
+          const u = store.users.find((x) => x.id === r.userId);
+          const w = store.workshops.find((x) => x.id === r.workshopId);
+          return [
+            u?.name || "",
+            u?.code || "",
+            u?.email || "",
+            w?.title || "",
+            labels[r.status] || r.status,
+          ];
+        });
+      downloadCsv("bsru-participants.csv", [
+        ["ชื่อ", "รหัสประจำตัว", "อีเมล", "เวิร์กช็อป", "สถานะ"],
+        ...rows,
+      ]);
+      return;
+    }
+    if (a === "reject" && staff()) {
+      openModal(
+        "ปฏิเสธผู้ใช้งาน",
+        `<p class="muted">กรุณาระบุเหตุผลเพื่อเก็บไว้เป็นหลักฐานและแจ้งผู้สมัคร</p><form id="reject-form" data-id="${id}" class="space"><div class="field"><label for="reject-reason">เหตุผลที่ปฏิเสธ</label><textarea id="reject-reason" name="reason" required minlength="3" maxlength="500" placeholder="เช่น ข้อมูลไม่ครบ หรือไม่พบข้อมูลในระบบมหาวิทยาลัย"></textarea></div><div class="error" role="alert"></div><div class="row"><button type="button" class="btn" data-action="close">ยกเลิก</button><button class="btn danger">ยืนยันการปฏิเสธ</button></div></form>`,
+      );
+      return;
     }
     if (a === "notification-go" && member()) {
       closeModal();
@@ -1136,6 +1610,7 @@
     }
     if (a === "switch") {
       clearRecovery();
+      apiSaveEpoch++;
       if (apiCsrf)
         try {
           await apiRequest("/api/logout", { method: "POST", body: "{}" });
@@ -1155,6 +1630,7 @@
     }
     if (a === "logout") {
       clearRecovery();
+      apiSaveEpoch++;
       if (apiCsrf)
         try {
           await apiRequest("/api/logout", { method: "POST", body: "{}" });
@@ -1166,6 +1642,7 @@
       closeModal();
       return render();
     }
+    if (a === "workshop-detail") return workshopDetail(id);
     if (a === "portal") {
       clearRecovery();
       closeModal();
@@ -1179,6 +1656,8 @@
       state.view = id === "mine" ? "mine" : "open";
       state.search = "";
       state.filter = "all";
+      state.dateFrom = "";
+      state.dateTo = "";
       if (id === "notifications") {
         state.notificationFilter = "general";
         state.notificationQuery = "";
@@ -1214,6 +1693,16 @@
           ? (state.slide - 1 + store.workshops.length) % store.workshops.length
           : id === "next"
             ? (state.slide + 1) % store.workshops.length
+            : Number(id);
+      return render();
+    }
+    if (a === "promo-slide") {
+      const total = promotionItems().length;
+      state.promoSlide =
+        id === "prev"
+          ? (state.promoSlide - 1 + total) % total
+          : id === "next"
+            ? (state.promoSlide + 1) % total
             : Number(id);
       return render();
     }
@@ -1301,6 +1790,7 @@
         return toast("ไม่สามารถปิดเวิร์กช็อปที่เสร็จสิ้นหรือปิดไปแล้ว");
       w.closed = true;
       w.closedAt = new Date().toISOString();
+
       closeModal();
       return commit("ปิดเวิร์กช็อปแล้ว ฝั่งผู้ใช้ไม่สามารถลงทะเบียนเพิ่มได้");
     }
@@ -1315,6 +1805,7 @@
       const u = store.users.find((u) => u.id === id && u.role === "user");
       if (u?.status === "WAITING") {
         u.status = "APPROVED";
+
         notifyUser(
           u.id,
           "บัญชีของคุณได้รับอนุมัติแล้ว",
@@ -1330,6 +1821,19 @@
     const r = store.registrations.find((r) => r.id === id);
     if (!r || r.status === "CANCELLED") return;
     const previous = r.status;
+    if (
+      ["ATTENDED", "ABSENT"].includes(previous) &&
+      ((a === "attend" && previous !== "ATTENDED") ||
+        (a === "absent" && previous !== "ABSENT"))
+    ) {
+      if (
+        !(await askConfirm(
+          "เปลี่ยนผลการเข้าร่วมที่บันทึกไว้แล้วหรือไม่? ชั่วโมงสะสมจะเปลี่ยนตามผลใหม่",
+        ))
+      )
+        return;
+      if (r.status !== previous || !staff()) return;
+    }
     if (a === "attend") r.status = "ATTENDED";
     else if (a === "absent") r.status = "ABSENT";
     else return;
@@ -1346,15 +1850,29 @@
       );
     }
     r.updatedAt = new Date().toISOString();
+
     commit("อัปเดตสถานะและชั่วโมงอบรมของผู้ใช้งานแล้ว");
   });
   document.addEventListener("change", (e) => {
+    if (["date-from", "date-to"].includes(e.target.id)) {
+      state[e.target.id === "date-from" ? "dateFrom" : "dateTo"] =
+        e.target.value;
+      render();
+    }
     if (e.target.id === "phase-filter") {
       state.filter = e.target.value;
       render();
     }
     if (e.target.id === "participant-filter") {
       participantWorkshop = e.target.value;
+      render();
+    }
+    if (e.target.id === "approval-status") {
+      state.approvalStatus = e.target.value;
+      render();
+    }
+    if (e.target.id === "participant-status") {
+      state.participantStatus = e.target.value;
       render();
     }
     if (e.target.id === "faculty") {
@@ -1391,6 +1909,16 @@
       state.notificationQuery = e.target.value;
       render();
       const search = $("#notification-search");
+      search?.focus();
+      search?.setSelectionRange(pos, pos);
+    }
+    if (["approval-search", "participant-search"].includes(e.target.id)) {
+      const pos = e.target.selectionStart;
+      if (e.target.id === "approval-search")
+        state.approvalQuery = e.target.value;
+      else state.participantQuery = e.target.value;
+      render();
+      const search = document.getElementById(e.target.id);
       search?.focus();
       search?.setSelectionRange(pos, pos);
     }
@@ -1478,6 +2006,7 @@
         "otp-form",
         "reset-form",
         "reply-form",
+        "reject-form",
       ].includes(f.id)
     )
       return;
@@ -1529,6 +2058,7 @@
         (c.replies ||= []).push(reply);
         c.status = d.status;
         c.updatedAt = reply.createdAt;
+
         notifyUser(
           c.userId,
           "เจ้าหน้าที่ตอบกลับคำร้องของคุณแล้ว",
@@ -1538,6 +2068,28 @@
         );
         closeModal();
         commit("ส่งคำตอบแล้ว ผู้ใช้ได้รับแจ้งเตือนในแอป");
+      }
+      if (f.id === "reject-form") {
+        if (!staff() || !d.reason || d.reason.length > 500)
+          throw Error("กรุณาระบุเหตุผลการปฏิเสธไม่เกิน 500 ตัวอักษร");
+        const target = store.users.find(
+          (u) => u.id === f.dataset.id && u.role === "user",
+        );
+        if (!target || target.status !== "WAITING")
+          throw Error("ผู้สมัครรายการนี้เปลี่ยนสถานะแล้ว");
+        if (!(await askConfirm("ยืนยันการปฏิเสธผู้สมัครรายนี้ใช่หรือไม่?")))
+          return;
+        target.status = "REJECTED";
+
+        notifyUser(
+          target.id,
+          "บัญชีผู้ใช้ยังไม่ได้รับการอนุมัติ",
+          `เหตุผล: ${d.reason}`,
+          "account",
+          target.id,
+        );
+        closeModal();
+        commit("ปฏิเสธผู้ใช้งานและบันทึกเหตุผลแล้ว");
       }
       if (f.id === "forgot-form") {
         if (!ready) throw Error("กำลังเตรียมระบบ กรุณารอสักครู่");
@@ -1651,8 +2203,9 @@
         Object.assign(store, loaded.store);
         window.__demoWorkshopSource = source;
         overlayDemoImages();
+        state.portal = logged.user.role;
         state.userId = logged.user.id;
-        state.page = "dashboard";
+        state.page = requestedPage();
         state.view = "open";
         render();
         toast("เข้าสู่ระบบสำเร็จ");
@@ -1810,6 +2363,8 @@
   async function initializeLocalApp() {
     try {
       const session = await apiRequest("/api/session");
+      otpAvailable = session.otpAvailable === true;
+      updateSync("เชื่อมต่อแล้ว");
       if (session.user) {
         apiCsrf = session.csrf;
         startApiPolling();
@@ -1820,7 +2375,8 @@
         overlayDemoImages();
         state.userId = session.user.id;
         state.portal = session.user.role;
-        state.page = "dashboard";
+        state.page = requestedPage();
+        state.view = state.page === "mine" ? "mine" : "open";
       }
       ready = true;
       render();

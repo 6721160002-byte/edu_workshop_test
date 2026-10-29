@@ -132,3 +132,9 @@ CREATE INDEX IF NOT EXISTS idx_registrations_user ON registrations (user_id, upd
 CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications (user_id, read_at, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_complaints_user ON complaints (user_id, created_at);
+CREATE TABLE IF NOT EXISTS login_attempts (
+  id TEXT PRIMARY KEY,
+  identity TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_login_attempts_identity ON login_attempts(identity, created_at);

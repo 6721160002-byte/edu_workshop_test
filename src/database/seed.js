@@ -2,8 +2,22 @@
 
 module.exports = function createSeed({ db, passwordRecord, now }) {
   async function seed() {
-    if ((await db.prepare("SELECT count(*) AS n FROM users").get()).n) return;
-    if (db.kind === "postgres" && process.env.SEED_DEMO !== "1") {
+    const existingUsers = (
+      await db.prepare("SELECT count(*) AS n FROM users").get()
+    ).n;
+    const productionPostgres =
+      db.kind === "postgres" && process.env.SEED_DEMO !== "1";
+    if (
+      existingUsers &&
+      (!productionPostgres ||
+        (
+          await db
+            .prepare("SELECT count(*) AS n FROM users WHERE role='staff'")
+            .get()
+        ).n)
+    )
+      return;
+    if (productionPostgres) {
       const { validNewPassword } = require("../utils");
       const email = String(process.env.BOOTSTRAP_ADMIN_EMAIL || "")
         .trim()
@@ -13,8 +27,11 @@ module.exports = function createSeed({ db, passwordRecord, now }) {
         !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
         !validNewPassword(password)
       ) {
-        throw new Error(
-          "First deployment requires BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD (12+ characters with upper/lower case, a number and a symbol).",
+        throw Object.assign(
+          new Error(
+            "First deployment requires BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD (12+ characters with upper/lower case, a number and a symbol).",
+          ),
+          { code: "BOOTSTRAP_ADMIN_REQUIRED" },
         );
       }
       const record = passwordRecord(password);
@@ -178,7 +195,7 @@ module.exports = function createSeed({ db, passwordRecord, now }) {
         place,
         capacity,
         hours,
-        0,
+        db.boolean(false),
         now(),
       );
     }

@@ -6,9 +6,9 @@ const child = spawn(
   process.execPath,
   [
     "--watch",
-    "--watch-path=src",
-    "--watch-path=server.js",
-    "--watch-path=database/schema.sql",
+    ...(["win32", "darwin"].includes(process.platform)
+      ? ["--watch-path=src", "--watch-path=server.js", "--watch-path=database"]
+      : []),
     "server.js",
   ],
   {

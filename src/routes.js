@@ -2,6 +2,8 @@
 
 module.exports = function createRoutes({
   db,
+  readJson,
+  isExpired,
   path,
   ROOT,
   DB_FILE,
@@ -22,8 +24,13 @@ module.exports = function createRoutes({
   viewFromSnapshot,
   mergeSnapshot,
   writeSnapshot,
+  refreshSnapshot,
 }) {
   async function routeApi(req, res, url) {
+    const cookieSecure =
+      process.env.VERCEL || process.env.NODE_ENV === "production"
+        ? "; Secure"
+        : "";
     if (req.method === "GET" && url.pathname === "/api/health") {
       return json(res, 200, {
         ok: true,
@@ -51,10 +58,18 @@ module.exports = function createRoutes({
       return json(res, 200, {
         user: session?.user || null,
         csrf: session?.csrf || null,
+        otpAvailable: !(
+          process.env.VERCEL || process.env.NODE_ENV === "production"
+        ),
       });
     }
     if (req.method === "POST" && url.pathname === "/api/otp/request")
       return bodyJson(req).then(async (data) => {
+        if (process.env.VERCEL || process.env.NODE_ENV === "production")
+          return json(res, 503, {
+            error: "ระบบยังไม่ได้ตั้งค่าบริการส่ง OTP กรุณาติดต่อเจ้าหน้าที่",
+            code: "OTP_DELIVERY_NOT_CONFIGURED",
+          });
         const purpose = data.purpose,
           channel = data.channel,
           contact = String(data.contact || "").trim(),
@@ -93,7 +108,7 @@ module.exports = function createRoutes({
             previous.channel === channel &&
             previous.contact.toLowerCase() === contact.toLowerCase()
           )
-            payload = JSON.parse(previous.payload_json);
+            payload = readJson(previous.payload_json);
           else {
             if (
               portal !== "user" ||
@@ -146,7 +161,9 @@ module.exports = function createRoutes({
           }
         } else {
           user = await db
-            .prepare(`SELECT * FROM users WHERE role=? AND ${channel}=?`)
+            .prepare(
+              `SELECT * FROM users WHERE role=? AND ${channel === "email" ? "lower(email)=lower(?)" : "phone=?"}`,
+            )
             .get(portal, contact);
           if (!user)
             return json(res, 404, { error: "ไม่พบบัญชีที่ผูกกับช่องทางนี้" });
@@ -191,7 +208,7 @@ module.exports = function createRoutes({
         if (
           !challenge ||
           challenge.consumed_at ||
-          challenge.expires_at <= now()
+          isExpired(challenge.expires_at)
         )
           return json(res, 410, {
             error: "OTP หมดอายุหรือใช้ไปแล้ว กรุณาขอใหม่",
@@ -207,12 +224,16 @@ module.exports = function createRoutes({
             Buffer.from(challenge.code_hash),
           )
         ) {
-          const attempts = challenge.attempts + 1;
-          await db
+          const updated = await db
             .prepare(
-              "UPDATE otp_challenges SET attempts=?,consumed_at=? WHERE id=?",
+              "UPDATE otp_challenges SET attempts=attempts+1,consumed_at=CASE WHEN attempts+1>=5 THEN ? ELSE consumed_at END WHERE id=? AND consumed_at IS NULL RETURNING attempts",
             )
-            .run(attempts, attempts >= 5 ? now() : null, id);
+            .get(now(), id);
+          if (!updated)
+            return json(res, 410, {
+              error: "OTP หมดอายุหรือใช้ไปแล้ว กรุณาขอใหม่",
+            });
+          const attempts = updated.attempts;
           return json(res, 400, {
             error:
               attempts >= 5
@@ -220,9 +241,22 @@ module.exports = function createRoutes({
                 : `OTP ไม่ถูกต้อง เหลือโอกาส ${5 - attempts} ครั้ง`,
           });
         }
-        const payload = JSON.parse(challenge.payload_json);
+        const payload = readJson(challenge.payload_json);
         await db.exec("BEGIN IMMEDIATE");
         try {
+          const current = await db
+            .prepare("SELECT * FROM otp_challenges WHERE id=?")
+            .get(id);
+          if (
+            !current ||
+            current.consumed_at ||
+            current.attempts >= 5 ||
+            isExpired(current.expires_at)
+          )
+            throw Object.assign(
+              new Error("OTP หมดอายุหรือใช้ไปแล้ว กรุณาขอใหม่"),
+              { status: 410 },
+            );
           await db
             .prepare("UPDATE otp_challenges SET consumed_at=? WHERE id=?")
             .run(now(), id);
@@ -246,7 +280,7 @@ module.exports = function createRoutes({
               p.hash,
               now(),
             );
-            const state = JSON.parse(
+            const state = readJson(
               (
                 await db
                   .prepare("SELECT data_json FROM app_state WHERE id=1")
@@ -287,7 +321,7 @@ module.exports = function createRoutes({
           });
         } catch (e) {
           await db.exec("ROLLBACK");
-          return json(res, 400, {
+          return json(res, e.status || 400, {
             error: e.message.includes("UNIQUE")
               ? "ข้อมูลบัญชีนี้ถูกใช้ไปแล้ว กรุณาเริ่มสมัครใหม่"
               : e.message,
@@ -308,23 +342,29 @@ module.exports = function createRoutes({
         const row = await db
           .prepare("SELECT * FROM password_reset_grants WHERE token_hash=?")
           .get(hashToken(grant));
-        if (!row || row.consumed_at || row.expires_at <= now())
+        if (!row || row.consumed_at || isExpired(row.expires_at))
           return json(res, 410, {
             error: "สิทธิ์ตั้งรหัสผ่านหมดอายุหรือใช้ไปแล้ว กรุณาขอ OTP ใหม่",
           });
         const p = passwordRecord(password);
         await db.exec("BEGIN IMMEDIATE");
         try {
+          const grantUser = await db
+            .prepare(
+              "UPDATE password_reset_grants SET consumed_at=? WHERE token_hash=? AND consumed_at IS NULL AND expires_at>? RETURNING user_id",
+            )
+            .get(now(), hashToken(grant), now());
+          if (!grantUser) {
+            await db.exec("ROLLBACK");
+            return json(res, 410, {
+              error: "สิทธิ์ตั้งรหัสผ่านหมดอายุหรือใช้ไปแล้ว กรุณาขอ OTP ใหม่",
+            });
+          }
           await db
             .prepare(
               "UPDATE users SET password_salt=?,password_hash=? WHERE id=?",
             )
             .run(p.salt, p.hash, row.user_id);
-          await db
-            .prepare(
-              "UPDATE password_reset_grants SET consumed_at=? WHERE token_hash=?",
-            )
-            .run(now(), hashToken(grant));
           await db
             .prepare("DELETE FROM sessions WHERE user_id=?")
             .run(row.user_id);
@@ -338,7 +378,7 @@ module.exports = function createRoutes({
     if (req.method === "GET" && url.pathname === "/api/store") {
       const session = await requireSession(req, res);
       if (!session) return;
-      const snapshot = JSON.parse(
+      const snapshot = readJson(
         (await db.prepare("SELECT data_json FROM app_state WHERE id=1").get())
           .data_json,
       );
@@ -382,6 +422,27 @@ module.exports = function createRoutes({
             .toLowerCase(),
           password = String(data.password || ""),
           portal = data.portal;
+        if (!identity || identity.length > 160 || password.length > 128)
+          return json(res, 400, { error: "กรุณาตรวจสอบข้อมูลเข้าสู่ระบบ" });
+        const cutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+        await db
+          .prepare("DELETE FROM login_attempts WHERE created_at < ?")
+          .run(cutoff);
+        const attempts = await db
+          .prepare(
+            "SELECT count(*) n FROM login_attempts WHERE identity=? AND created_at>=?",
+          )
+          .get(identity, cutoff);
+        if (Number(attempts.n) >= 8)
+          return json(res, 429, {
+            error: "ลองเข้าสู่ระบบหลายครั้งเกินไป กรุณารอ 15 นาที",
+            code: "LOGIN_RATE_LIMITED",
+          });
+        await db
+          .prepare(
+            "INSERT INTO login_attempts(id,identity,created_at) VALUES(?,?,?)",
+          )
+          .run(uid(), identity, now());
         const user = await db
           .prepare("SELECT * FROM users WHERE lower(email)=? OR phone=?")
           .get(identity, identity);
@@ -392,12 +453,20 @@ module.exports = function createRoutes({
           return json(res, 401, {
             error: "อีเมล/เบอร์โทรศัพท์ หรือรหัสผ่านไม่ถูกต้อง",
           });
-        if (user.role !== portal)
+        if (portal && user.role !== portal)
           return json(res, 403, {
             error: "บัญชีนี้ไม่มีสิทธิ์ใน Portal ที่เลือก",
           });
         if (user.status !== "APPROVED")
-          return json(res, 403, { error: "บัญชีนี้รอเจ้าหน้าที่อนุมัติ" });
+          return json(res, 403, {
+            error:
+              user.status === "REJECTED"
+                ? "บัญชีนี้ไม่ได้รับอนุมัติ กรุณาติดต่อเจ้าหน้าที่เพื่อตรวจสอบข้อมูล"
+                : "บัญชีนี้รอเจ้าหน้าที่อนุมัติ",
+          });
+        await db
+          .prepare("DELETE FROM login_attempts WHERE identity=?")
+          .run(identity);
         const token = crypto.randomBytes(32).toString("base64url"),
           csrf = crypto.randomBytes(24).toString("base64url"),
           expires = new Date(Date.now() + SESSION_TTL_MS).toISOString();
@@ -411,7 +480,7 @@ module.exports = function createRoutes({
           200,
           { user: publicUser(user), csrf },
           {
-            "Set-Cookie": `bsru_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`,
+            "Set-Cookie": `bsru_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}${cookieSecure}`,
           },
         );
       });
@@ -426,8 +495,7 @@ module.exports = function createRoutes({
         200,
         { ok: true },
         {
-          "Set-Cookie":
-            "bsru_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0",
+          "Set-Cookie": `bsru_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${cookieSecure}`,
         },
       );
     }
@@ -450,6 +518,18 @@ module.exports = function createRoutes({
             throw Object.assign(new Error("กิจกรรมปิดรับลงทะเบียนแล้ว"), {
               status: 409,
             });
+          const conflict = await db
+            .prepare(
+              "SELECT w.title FROM registrations r JOIN workshops w ON w.id=r.workshop_id WHERE r.user_id=? AND r.status<>'CANCELLED' AND w.id<>? AND w.start_at<? AND w.end_at>? LIMIT 1",
+            )
+            .get(session.user.id, workshopId, w.end_at, w.start_at);
+          if (conflict)
+            throw Object.assign(
+              new Error(
+                `เวลาตรงกับกิจกรรม “${conflict.title}” ที่ลงทะเบียนไว้แล้ว`,
+              ),
+              { status: 409 },
+            );
           const prior = await db
             .prepare(
               "SELECT * FROM registrations WHERE user_id=? AND workshop_id=?",
@@ -481,6 +561,7 @@ module.exports = function createRoutes({
                 `INSERT INTO registrations(id,user_id,workshop_id,status,created_at,updated_at) VALUES(?,?,?,'PENDING',?,?)`,
               )
               .run(uid(), session.user.id, workshopId, t, t);
+          await refreshSnapshot();
           await db.exec("COMMIT");
           return json(res, 200, { ok: true, workshops: await workshopRows() });
         } catch (e) {
@@ -504,6 +585,18 @@ module.exports = function createRoutes({
         if (row.status !== status) {
           await db.exec("BEGIN IMMEDIATE");
           try {
+            const current = await db
+              .prepare("SELECT status FROM registrations WHERE id=?")
+              .get(row.id);
+            if (current.status === "CANCELLED")
+              throw Object.assign(
+                new Error("ไม่สามารถเช็กชื่อรายการที่ยกเลิกแล้ว"),
+                { status: 409 },
+              );
+            if (current.status === status) {
+              await db.exec("COMMIT");
+              return json(res, 200, { ok: true });
+            }
             await db
               .prepare(
                 "UPDATE registrations SET status=?,updated_at=? WHERE id=?",
@@ -522,10 +615,11 @@ module.exports = function createRoutes({
                 row.id,
                 now(),
               );
+            await refreshSnapshot();
             await db.exec("COMMIT");
           } catch (e) {
             await db.exec("ROLLBACK");
-            return json(res, 400, { error: e.message });
+            return json(res, e.status || 400, { error: e.message });
           }
         }
         return json(res, 200, { ok: true });

@@ -1,31 +1,45 @@
-# รายงานตรวจสอบระบบ BSRU Workshop
+# รายงานตรวจสอบและแก้ไข BSRU Workshop
 
-วันที่ตรวจ: 27 ตุลาคม 2569  
-โครงการ: `C:\Users\ASUS\Desktop\edu_workshop`  
-ระบบที่ตรวจ: Node.js + SQLite บน Windows
+วันที่: 28 ตุลาคม 2569 (Asia/Bangkok)
 
-## ผลการตรวจ
+ตรวจไฟล์แอปใน src/, api/, public/, database/, scripts/, tests/, package/lockfile, การตั้งค่า Vercel, คู่มือ และรายการไฟล์ในโฟลเดอร์ ไม่แก้ไฟล์ภายใน .git หรือ dependencies ใน node_modules และตรวจฐานข้อมูล SQLite ที่ใช้งานด้วยโหมดอ่านอย่างเดียว
 
-- หน้าเว็บจริงตอบ HTTP 200 ที่ `http://127.0.0.1:8001/` และ API health ตอบ `ok: true` เชื่อม SQLite ได้
-- ล็อกอินบัญชีสาธิตจริงได้ ผู้ใช้ได้รับ 5 เวิร์กช็อปและเห็นเฉพาะรายการลงทะเบียนของตน
-- ฐานข้อมูลจริงผ่าน `PRAGMA integrity_check` (`ok`) และ `PRAGMA foreign_key_check` ไม่พบข้อผิดพลาด
-- สำเนาฐานข้อมูลแยกสำหรับทดสอบผ่าน 27 การตรวจ ครอบคลุมสมัครและ OTP, รออนุมัติ, สิทธิ์ User/Staff, ลงทะเบียน, ยกเลิกและลงใหม่, แบบประเมิน, เช็กชื่อ, คำร้อง/คำตอบ, การแจ้งเตือน, อ่านแล้ว, เปลี่ยนรหัสผ่าน และจำกัด OTP ผิด 5 ครั้ง
-- ทดสอบแย่งที่นั่งสุดท้ายพร้อมกัน: คำขอหนึ่งสำเร็จ อีกคำขอถูกปฏิเสธ และจำนวนผู้ลงทะเบียนไม่เกิน 1 คน
-- รีสตาร์ตเซิร์ฟเวอร์ทดสอบแล้วข้อมูลบัญชี รายการลงทะเบียน คะแนน และคำร้องยังอยู่ครบ
-- ตรวจ URL ผิดรูปได้ HTTP 400, คำขออ่านข้อมูลที่ไม่ล็อกอินได้ HTTP 401 และไฟล์นอก `public` ถูกปฏิเสธ
-- ไฟล์ต้นฉบับ `index.html` และสำเนา `index.original.html` มี SHA-256 ตรงกัน
+## การแก้ไขหลัก
 
-## บัคที่แก้
+- src/utils.js: รองรับ JSON ทั้งข้อความและ object จาก JSONB; ตรวจวันหมดอายุด้วยเวลา; แปลงเวลากิจกรรม Asia/Bangkok เป็น UTC; ยอมรับภาพ assets ที่มีอยู่จริง; ปฏิเสธ password hash เสียอย่างปลอดภัย
+- src/database/postgres.js และ index.js: รองรับ Date จาก TIMESTAMPTZ และ Boolean; ตรวจชนิดคอลัมน์ closed เพื่อรองรับฐานข้อมูลใหม่กับ INTEGER เดิม
+- src/database/seed.js: สร้างผู้ดูแลได้เมื่อมีสมาชิกเดิมแต่ยังไม่มีเจ้าหน้าที่ ไม่เขียนทับเจ้าหน้าที่ที่มีอยู่
+- database/schema.postgres.sql: รวม Schema PostgreSQL/Supabase ไว้ไฟล์เดียว ใช้ JSONB/TIMESTAMPTZ/BOOLEAN และเปิด RLS สำหรับตารางแอป ไม่มี DROP TABLE หรือ ALTER TYPE เพื่อแปลงข้อมูลเดิม
+- src/auth.js: ปฏิเสธ session หมดอายุ วันที่ไม่ถูกต้อง และบัญชีที่ไม่อยู่ในสถานะ APPROVED
+- src/store.js: เปรียบเทียบ JSON โดยไม่ขึ้นกับลำดับ key; ตรวจ ID ซ้ำ ชนิดข้อมูล และประวัติที่ไม่มีสิทธิ์แก้; กู้โครงสร้าง snapshot ที่เป็นค่าเริ่มต้น {} จากตารางเดิม; อัปเดต snapshot/revision หลัง API ลงทะเบียนหรือเช็กชื่อ
+- src/routes.js: อ่าน JSONB อย่างถูกต้อง; OTP/grant ใช้ครั้งเดียวภายใต้ transaction; ค้นหาอีเมลรีเซ็ตโดยไม่สนตัวพิมพ์ใหญ่เล็ก; ใช้ Secure cookie ใน production; ไม่เช็กชื่อรายการที่ยกเลิก; ตอบ Error ชัดเจนเมื่อยังไม่ตั้งค่าส่ง OTP
+- src/http.js: ตอบ 400 สำหรับ JSON null/array/primitive และตอบ 413 สำหรับข้อมูลเกินขนาดโดยไม่ตัด socket ทิ้งทันที
+- src/app.js: ตรวจ Origin สำหรับ OPTIONS และเลิกส่ง Access-Control-Allow-Origin เป็น null
+- src/static.js: ปฏิเสธ URL ที่มี null byte รองรับ HEAD/405 และจัดการข้อผิดพลาดของ file stream
+- src/config.js และ server.js: ตรวจค่าพอร์ต แสดงพอร์ตจริงเมื่อใช้ 0 และรอปิดฐานข้อมูลเมื่อเริ่มเซิร์ฟเวอร์ไม่ได้
+- public/assets/js/app.js: แก้ revision ย้อนกลับระหว่างบันทึกหลายครั้ง ป้องกันคำขอของบัญชีเก่าทับหน้าบัญชีใหม่ และซ่อนบัญชีสาธิตนอก localhost
+- public/index.html และ assets/css/app.css: ย้าย inline CSS ไปไฟล์ CSS โดยรักษาลำดับ cascade เดิม และแก้ข้อความกรณีปิด JavaScript
+- scripts/dev.js: ไม่ส่ง --watch-path บน Linux; start-local.bat ใช้ UTF-8 เพื่อแสดงภาษาไทย
+- .vercelignore: ไม่ส่ง storage, cache และไฟล์ทดสอบไปกับ source deployment
+- อัปเดต README, คู่มือ Deploy และพจนานุกรมข้อมูล
 
-1. ประเมินซ้ำหลังยกเลิกและลงทะเบียนกิจกรรมเดิมใหม่เคยสร้างคะแนนแถวใหม่ชน unique key ของรายการลงทะเบียน แก้ให้ใช้รายการลงทะเบียนเดิมและอัปเดตคะแนนเดิม
-2. URL หรือ cookie ที่มี percent encoding ผิดรูปอาจทำให้การถอดรหัส throw error แก้ให้ตอบ HTTP 400 หรือปฏิบัติต่อ cookie นั้นเป็นผู้ใช้ที่ยังไม่ล็อกอิน
-3. ข้อความท้ายหน้าจอเดิมระบุว่าข้อมูลอยู่ในหน่วยความจำและหายเมื่อรีเฟรช แก้ให้ระบุว่าจัดเก็บใน SQLite
-4. ยืนยันให้เหลือ Node server ของโครงการเพียงตัวเดียวที่พอร์ต 8001 หลังเคยมีโปรเซสเก่าซ้อนอยู่
+## ไฟล์ที่ลบ
 
-## ขอบเขตที่ยังต้องตั้งค่า
+- index.html และ index.original.html ที่โฟลเดอร์หลัก: เป็นหน้าเก่าที่ local server และ Vercel ไม่ใช้ ตรวจ hash แล้วตรงกับสำเนาใน Git HEAD จึงกู้คืนได้ หน้าเว็บที่ใช้งานคือ public/index.html
+- database/schema.supabase.sql: เนื้อหาทั้งหมดรวมอยู่ใน database/schema.postgres.sql แล้ว พร้อมเพิ่ม RLS และไม่มีโค้ดเรียกใช้ชื่อไฟล์ที่ลบ
+- .npm-cache/: แคชดาวน์โหลด npm ที่สร้างใหม่ได้
 
-โหมด OTP เป็นโหมดสาธิตสำหรับ localhost: แสดงรหัสบนหน้าเว็บเพื่อทดสอบ แต่ยังไม่ได้ส่งอีเมลหรือ SMS จริงตามข้อกำหนดเดิม
+เก็บ node_modules, ฐานข้อมูล storage/bsru-workshop.sqlite และ WAL/SHM, log และเอกสารที่ยังใช้ ไม่มีการล้างข้อมูลบัญชีหรือเวิร์กช็อป
 
-ตรวจหน้าเริ่มต้นจากเบราว์เซอร์และตรวจ HTML ที่ตอบจากเซิร์ฟเวอร์แล้ว แต่ยังไม่ได้คลิกทุกหน้าจอ/ทุกฟอร์มผ่าน GUI; workflow ส่วนใหญ่ตรวจผ่าน HTTP API โดยตรง
+## ผลตรวจ
 
-การทดสอบ workflow ใช้ฐานข้อมูลสำเนาแยกและลบไฟล์ทดสอบหลังตรวจเสร็จ ข้อมูลกิจกรรมและบัญชีในฐานข้อมูลใช้งานจริงไม่ได้ถูกเปลี่ยนจากการทดสอบนี้
+- npm run check: ตรวจไวยากรณ์ JavaScript ทั้งโปรเจกต์
+- npm test: 15 tests ครอบคลุม SQLite, Schema Supabase ใหม่, PostgreSQL รุ่นเก่า, login/session, expired/rejected session, cold start, JSONB, Boolean, เวลา Bangkok, workshop save, OTP/reset/replay, revision conflict, administrator bootstrap, RLS, HTTP และการนำทาง UI ของผู้เรียน/เจ้าหน้าที่
+- npm run format:check: ตรวจรูปแบบโค้ด
+- PostgreSQL integration tests ใช้ PGlite ในเครื่อง ส่วน transaction advisory lock ใช้ test stub จึงยังไม่ใช่การทดสอบคำขอพร้อมกันบน Supabase จริง
+
+## ขั้นตอนบนระบบ Deploy และข้อจำกัด
+
+ยังไม่ได้เชื่อมต่อ Supabase จริง ไม่ได้เปลี่ยน Environment Variables และไม่ได้ Push/Redeploy จากการตรวจครั้งนี้ หลังนำโค้ดขึ้น ต้องตั้ง DATABASE_URL ให้ถูกต้อง และตั้ง BOOTSTRAP_ADMIN_EMAIL/BOOTSTRAP_ADMIN_PASSWORD หากยังไม่มีเจ้าหน้าที่ ตรวจผลที่ /api/health
+
+บริการส่งอีเมล/SMS สำหรับ OTP ยังไม่ถูกติดตั้งหรือเชื่อมต่อ การล็อกอินบัญชีที่มีอยู่ไม่ต้องใช้ OTP แต่การสมัครและรีเซ็ตรหัสผ่านบน production ต้องเชื่อมบริการส่งจริงก่อน

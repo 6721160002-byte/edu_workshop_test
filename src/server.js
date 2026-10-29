@@ -9,7 +9,7 @@ let triedFallbackPort = false;
 async function start() {
   const application = await require("./app")();
   const server = http.createServer(application.handler);
-  server.on("error", (err) => {
+  server.on("error", async (err) => {
     if (
       err.code === "EADDRINUSE" &&
       !triedFallbackPort &&
@@ -29,10 +29,11 @@ async function start() {
         `พอร์ต ${activePort} ถูกใช้งานอยู่ กรุณาปิดโปรแกรมที่ใช้อยู่ หรือกำหนด PORT เป็นพอร์ตว่าง`,
       );
     else console.error(err.message);
-    application.close();
+    await application.close();
     process.exitCode = 1;
   });
   function onListening() {
+    activePort = server.address().port;
     console.log(
       `BSRU Workshop server พร้อมใช้งาน: http://${HOST}:${activePort}`,
     );

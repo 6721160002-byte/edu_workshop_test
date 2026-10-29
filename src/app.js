@@ -29,16 +29,21 @@ module.exports = async function createApplication(options = {}) {
   const { serveStatic } = require("./static")(context);
 
   const handler = (req, res) => {
+    if (!isAllowedOrigin(req, APP_ORIGIN))
+      return json(res, 403, { error: "คำขอมาจากแหล่งที่ไม่ได้รับอนุญาต" });
     if (req.method === "OPTIONS") {
       res.writeHead(204, {
-        "Access-Control-Allow-Origin": "null",
+        ...(req.headers.origin
+          ? {
+              "Access-Control-Allow-Origin": req.headers.origin,
+              Vary: "Origin",
+            }
+          : {}),
         "Access-Control-Allow-Methods": "GET,POST",
         "Access-Control-Allow-Headers": "Content-Type,X-CSRF-Token",
       });
       return res.end();
     }
-    if (!isAllowedOrigin(req, APP_ORIGIN))
-      return json(res, 403, { error: "คำขอมาจากแหล่งที่ไม่ได้รับอนุญาต" });
     let url;
     try {
       url = new URL(req.url, "http://localhost");

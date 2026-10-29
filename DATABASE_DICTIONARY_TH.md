@@ -1,6 +1,8 @@
 # พจนานุกรมข้อมูล BSRU Workshop
 
-ฐานข้อมูล `storage/bsru-workshop.sqlite` ใช้ SQLite; วันเวลาแสดงตามเขตเวลาของเครื่อง (ตั้งเป้าหมายใช้งาน Asia/Bangkok).
+ใช้ SQLite ในเครื่อง (`database/schema.sql`) และ PostgreSQL/Supabase บน Vercel (`database/schema.postgres.sql`) วันเวลากิจกรรมใช้ Asia/Bangkok และส่งค่าลงฐานข้อมูลเป็น UTC ที่มี timezone ชัดเจน
+
+Schema PostgreSQL หลักใช้ `JSONB` สำหรับ `data_json`/`payload_json`, `TIMESTAMPTZ` สำหรับวันเวลา และ `BOOLEAN` สำหรับ `closed` โค้ดยังอ่านฐานข้อมูล PostgreSQL รุ่นเดิมที่ใช้ TEXT/INTEGER ได้โดยไม่ล้างหรือแปลงตารางอัตโนมัติ
 
 ## users — บัญชีผู้ใช้
 
@@ -68,3 +70,15 @@
 ## app_state — รุ่นข้อมูลสำหรับซิงก์หน้าเว็บ
 
 เก็บ revision และ JSON snapshot ที่ใช้ซิงก์ UI กับข้อมูลเชิงสัมพันธ์ การแก้ข้อมูลใช้ transaction; ถ้าข้อมูลเปลี่ยนจากหน้าต่างอื่น API ปฏิเสธ revision เก่า
+# ตารางเพิ่มเติม: login_attempts
+
+ใช้จำกัดการลองเข้าสู่ระบบต่อบัญชีในช่วง 15 นาที และล้างรายการหมดช่วงเวลาเมื่อมีคำขอเข้าสู่ระบบ
+
+| ฟิลด์ | ชนิด | ความหมาย |
+|---|---|---|
+| id | TEXT (PK) | รหัสการลองเข้าสู่ระบบ |
+| identity | TEXT | อีเมลที่แปลงเป็นตัวพิมพ์เล็ก หรือเบอร์โทรศัพท์ |
+| created_at | TIMESTAMPTZ / TEXT ใน SQLite | เวลาลองเข้าสู่ระบบ |
+
+ดัชนี: `idx_login_attempts_identity(identity, created_at)`; PostgreSQL เปิด RLS และไม่ให้เบราว์เซอร์อ่านตารางโดยตรง
+
