@@ -142,7 +142,18 @@ for (const legacy of [false, true])
   test(`login, workshops, OTP and cold start with ${legacy ? "legacy TEXT/INTEGER" : "Supabase JSONB/TIMESTAMPTZ/BOOLEAN"} schema`, async (t) => {
     process.env.SEED_DEMO = "1";
     const db = await database({ legacy });
-    const app = await require("../src/app")({ database: db });
+    const sent = [];
+    let rejectEmail = false;
+    const app = await require("../src/app")({
+      database: db,
+      emailDelivery: {
+        available: true,
+        async send(email, code) {
+          if (rejectEmail) throw Error("provider failed");
+          sent.push({ email, code });
+        },
+      },
+    });
     const server = http.createServer(app.handler);
     server.listen(0, "127.0.0.1");
     await once(server, "listening");
@@ -210,11 +221,184 @@ for (const legacy of [false, true])
     // TIMESTAMPTZ sessions and JSONB documents must survive a cold start.
     await require("../src/app")({ database: db });
     assert.equal((await call("store", undefined, student)).status, 200);
+    const draft = {
+      name: "New Member",
+      type: "นักศึกษา",
+      code: "NEW001",
+      email: "new001@bsru.ac.th",
+      phone: "0800000099",
+      password: "SecureNewPassword123!",
+    };
+    const request = await call("registration/request", draft);
+    assert.equal(request.status, 200, JSON.stringify(request.body));
+    assert.equal(request.body.code, undefined, "never return the OTP");
+    assert.equal(
+      await db.prepare("SELECT id FROM users WHERE email=?").get(draft.email),
+      undefined,
+    );
+    const flow = { flowId: request.body.flowId, token: request.body.token };
+    assert.equal(
+      (await call("registration/status", flow)).status,
+      200,
+      "reload resumes verification",
+    );
+    assert.equal(
+      (await call("registration/status", { ...flow, token: "forged" })).status,
+      410,
+    );
+    assert.equal(
+      (await call("registration/verify", { ...flow, code: "invalid" })).status,
+      400,
+    );
+    assert.equal(
+      (await call("registration/resend", flow)).status,
+      429,
+      "server enforces cooldown",
+    );
+    const codes = () =>
+      db
+        .prepare(
+          "SELECT * FROM otp_challenges WHERE purpose='email-registration-code' ORDER BY created_at DESC",
+        )
+        .all();
+    async function ageLatest() {
+      const row = (await codes())[0];
+      await db
+        .prepare("UPDATE otp_challenges SET created_at=? WHERE id=?")
+        .run(new Date(Date.now() - 61000).toISOString(), row.id);
+    }
+    const oldCode = sent.at(-1).code;
+    await ageLatest();
+    assert.equal(
+      (
+        await call("registration/email", {
+          ...flow,
+          email: "new002@bsru.ac.th",
+        })
+      ).status,
+      200,
+    );
+    assert.equal(sent.at(-1).email, "new002@bsru.ac.th");
+    const revoked = (await codes()).find((r) => r.contact === draft.email);
+    assert.ok(revoked.consumed_at, "editing email revokes original code");
+    assert.equal(
+      (await call("registration/verify", { ...flow, code: oldCode })).status,
+      400,
+    );
+    const current = (await codes())[0];
+    await db
+      .prepare("UPDATE otp_challenges SET expires_at=? WHERE id=?")
+      .run("2000-01-01T00:00:00.000Z", current.id);
+    assert.equal(
+      (await call("registration/verify", { ...flow, code: sent.at(-1).code }))
+        .status,
+      410,
+      "expired code rejected",
+    );
+    await ageLatest();
+    assert.equal((await call("registration/resend", flow)).status, 200);
+    assert.equal((await call("registration/resend", flow)).status, 429);
+    await ageLatest();
+    assert.equal(
+      (await call("registration/resend", flow)).status,
+      429,
+      "server enforces the 15-minute send quota after cooldown",
+    );
+    const emailVerified = await call("registration/verify", {
+      ...flow,
+      code: sent.at(-1).code,
+    });
+    assert.equal(emailVerified.status, 200, JSON.stringify(emailVerified.body));
+    assert.equal(emailVerified.body.user.status, "APPROVED");
+    assert.equal(emailVerified.body.user.role, "user");
+    const newSession = {
+      Cookie: emailVerified.cookie.split(";")[0],
+      "X-CSRF-Token": emailVerified.body.csrf,
+    };
+    assert.equal(
+      (await call("store", undefined, newSession)).status,
+      200,
+      "emailVerified member enters immediately",
+    );
+    assert.equal(
+      (await call("registration/verify", { ...flow, code: sent.at(-1).code }))
+        .status,
+      410,
+      "one use",
+    );
+    assert.equal(
+      (
+        await call("registration/request", {
+          ...draft,
+          email: "new002@bsru.ac.th",
+        })
+      ).status,
+      409,
+    );
+    const pending = await call("registration/request", {
+      ...draft,
+      email: "pending@bsru.ac.th",
+      code: "PENDING001",
+      phone: "0800000088",
+    });
+    assert.equal(pending.status, 200);
+    await ageLatest();
+    const resumed = await call("registration/request", {
+      email: "pending@bsru.ac.th",
+      password: draft.password,
+    });
+    assert.equal(
+      resumed.status,
+      200,
+      "existing pending email can continue without duplicate account",
+    );
+    for (let i = 0; i < 5; i++)
+      assert.equal(
+        (
+          await call("registration/verify", {
+            flowId: resumed.body.flowId,
+            token: resumed.body.token,
+            code: "wrong",
+          })
+        ).status,
+        400,
+      );
+    assert.equal(
+      (
+        await call("registration/verify", {
+          flowId: resumed.body.flowId,
+          token: resumed.body.token,
+          code: sent.at(-1).code,
+        })
+      ).status,
+      429,
+      "attempt limit",
+    );
+    await ageLatest();
+    rejectEmail = true;
+    assert.equal(
+      (
+        await call("registration/resend", {
+          flowId: resumed.body.flowId,
+          token: resumed.body.token,
+        })
+      ).status,
+      502,
+      "provider failure is not a success",
+    );
+    rejectEmail = false;
+    const staffOtp = await call("otp/request", {
+      purpose: "reset",
+      channel: "email",
+      contact: "admin1@bsru.ac.th",
+      portal: "auto",
+    });
+    assert.equal(staffOtp.status, 200, JSON.stringify(staffOtp.body));
     const otp = await call("otp/request", {
       purpose: "reset",
       channel: "email",
       contact: "STD_DEMO@BSRU.AC.TH",
-      portal: "user",
+      portal: "auto",
     });
     assert.equal(otp.status, 200, JSON.stringify(otp.body));
     const verified = await call("otp/verify", {
@@ -257,7 +441,7 @@ for (const legacy of [false, true])
     await db.prepare("UPDATE app_state SET data_json=? WHERE id=1").run("{}");
     await require("../src/app")({ database: db });
     const rebuilt = (await call("store", undefined, admin)).body.store;
-    assert.equal(rebuilt.users.length, 3);
+    assert.equal(rebuilt.users.length, 4);
     assert.equal(rebuilt.workshops.length, 5);
     assert.equal(
       rebuilt.workshops.find((w) => w.id === initial.workshops[0].id).start,
@@ -308,10 +492,22 @@ test("bootstrap administrator works with existing members and public table reads
     "new-admin@example.test",
   );
   await db.exec("CREATE ROLE bsru_reader");
-  await db.exec("GRANT SELECT ON users, sessions, app_state TO bsru_reader");
+  await db
+    .prepare(
+      "INSERT INTO firebase_identities(firebase_uid,user_id) VALUES(?,?)",
+    )
+    .run("private-firebase-uid", "existing");
+  await db.exec(
+    "GRANT SELECT ON users, sessions, app_state, firebase_identities TO bsru_reader",
+  );
   await db.exec("SET ROLE bsru_reader");
   try {
-    for (const table of ["users", "sessions", "app_state"])
+    for (const table of [
+      "users",
+      "sessions",
+      "app_state",
+      "firebase_identities",
+    ])
       assert.deepEqual(await db.prepare("SELECT * FROM " + table).all(), []);
   } finally {
     await db.exec("RESET ROLE");

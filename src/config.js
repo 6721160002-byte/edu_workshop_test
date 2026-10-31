@@ -1,6 +1,7 @@
 "use strict";
 const path = require("node:path");
 const ROOT = path.resolve(__dirname, "..");
+require("./environment")(ROOT);
 const PUBLIC = path.join(ROOT, "public");
 const DATA = path.join(ROOT, "storage");
 const DB_FILE = process.env.DB_FILE

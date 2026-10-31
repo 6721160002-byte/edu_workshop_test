@@ -19,6 +19,19 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower ON users (LOWER(email));
 
+-- Optional readable copies, only for STORE_PLAINTEXT_PASSWORDS=1.
+-- Restricted to trusted database operators; never returned by the website.
+CREATE TABLE IF NOT EXISTS user_passwords (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  password_plaintext TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS firebase_identities (
+  firebase_uid TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL UNIQUE REFERENCES users(id)
+);
+
 CREATE TABLE IF NOT EXISTS workshops (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
@@ -126,6 +139,9 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id, expires_at);
 -- Requests use the server's database connection and application authorization.
 -- No browser/anon access to password hashes, sessions, or OTP records.
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_passwords ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON user_passwords FROM PUBLIC;
+ALTER TABLE firebase_identities ENABLE ROW LEVEL SECURITY;
 ALTER TABLE workshops ENABLE ROW LEVEL SECURITY;
 ALTER TABLE registrations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ratings ENABLE ROW LEVEL SECURITY;

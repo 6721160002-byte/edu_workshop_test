@@ -10,6 +10,9 @@
     "dev": "node scripts/dev.js",
     "start": "node server.js",
     "check": "node scripts/check.js",
+    "db:status": "node scripts/database.js status",
+    "db:backup": "node scripts/database.js backup",
+    "db:migrate": "node scripts/database.js migrate",
     "test": "node --test tests/*.test.js",
     "format": "prettier --write \"api/**/*.js\" \"src/**/*.js\" \"scripts/**/*.js\" \"tests/**/*.js\" \"public/assets/js/**/*.js\" \"public/assets/css/**/*.css\" public/index.html server.js package.json vercel.json",
     "format:check": "prettier --check \"api/**/*.js\" \"src/**/*.js\" \"scripts/**/*.js\" \"tests/**/*.js\" \"public/assets/js/**/*.js\" \"public/assets/css/**/*.css\" public/index.html server.js package.json vercel.json"
@@ -20,6 +23,7 @@
     "prettier": "^3.9.10"
   },
   "dependencies": {
+    "nodemailer": "^10.3.1",
     "pg": "^8.23.1"
   }
 }

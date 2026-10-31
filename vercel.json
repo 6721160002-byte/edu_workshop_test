@@ -5,7 +5,7 @@
   "outputDirectory": "public",
   "functions": {
     "api/index.js": {
-      "includeFiles": "database/*.sql"
+      "includeFiles": "database/**"
     }
   },
   "rewrites": [{ "source": "/api/:path*", "destination": "/api/index" }]

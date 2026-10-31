@@ -84,7 +84,6 @@ test("isolated application: assets, login, authorization and persistence", async
     body: JSON.stringify({
       identity: "std_demo@bsru.ac.th",
       password: "123456",
-      portal: "user",
     }),
   });
   assert.equal(login.status, 200);

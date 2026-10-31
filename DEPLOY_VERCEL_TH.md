@@ -10,6 +10,10 @@
    - `DATABASE_URL`: PostgreSQL connection string พร้อมค่า TLS ตามที่ผู้ให้บริการกำหนด ถ้าใช้ Supabase ให้คัดลอก Transaction pooler จากหน้า Connect (พอร์ต 6543 และชื่อผู้ใช้ตามที่หน้า Connect ระบุ) ใช้รหัสผ่านฐานข้อมูล ไม่ใช่ anon key หรือรหัสผ่านบัญชี Supabase หากใช้ Neon ให้ใช้ pooled connection string
    - `BOOTSTRAP_ADMIN_EMAIL`: อีเมลผู้ดูแลระบบคนแรก
    - `BOOTSTRAP_ADMIN_PASSWORD`: รหัสผ่านอย่างน้อย 12 ตัว มีตัวพิมพ์ใหญ่ ตัวพิมพ์เล็ก ตัวเลข และสัญลักษณ์ ห้ามมีช่องว่าง
+   - `REGISTRATION_PROVIDER`: `password` สำหรับสมัครและเข้าสู่ระบบปกติ
+   - `STORE_PLAINTEXT_PASSWORDS`: ปกติปิด (`0`) หากเจ้าของระบบเลือกเก็บรหัสผ่านที่อ่านได้ ให้ตั้ง `1` ตาม [SUPABASE_PASSWORD_VIEW_TH.md](SUPABASE_PASSWORD_VIEW_TH.md) และ deploy โค้ดรุ่นนี้
+   - `SMTP_HOST`: `smtp.gmail.com`, `SMTP_PORT`: `465`
+   - `SMTP_USER`: Gmail ผู้ส่ง และ `SMTP_PASSWORD`: Google App Password สำหรับส่ง OTP รีเซ็ตรหัสผ่าน ดู [PASSWORD_RESET_SETUP_TH.md](PASSWORD_RESET_SETUP_TH.md)
    - `APP_ORIGIN` (ไม่บังคับ): URL จริง เช่น `https://your-project.vercel.app` ถ้าใช้หลาย Preview URL ให้เว้นค่านี้เพื่อใช้ Host ของคำขอ
 4. ใช้ Framework Preset **Other** และ Root Directory เป็นโฟลเดอร์ที่มี `package.json` ไฟล์ `vercel.json` กำหนดให้เสิร์ฟ `public/`, ไม่ต้องมี build command และส่ง `/api/*` ไป Function
 5. Push โค้ดและ Redeploy หลังตั้งค่า Environment Variables
@@ -25,9 +29,9 @@ Schema หลักมีไฟล์เดียวคือ `database/schema.p
 
 ## ขอบเขต
 
-- ยังไม่ได้ย้ายข้อมูลจาก `storage/bsru-workshop.sqlite` ไป PostgreSQL อัตโนมัติ ฐานข้อมูลใหม่เริ่มด้วยผู้ดูแลหนึ่งบัญชีและยังไม่มีเวิร์กช็อป
+- หากต้องการเก็บข้อมูล SQLite เดิม ให้ย้ายด้วย `npm run db:migrate` ก่อนเริ่มเว็บบนฐานข้อมูลใหม่ ตาม [SUPABASE_SETUP_TH.md](SUPABASE_SETUP_TH.md) การตั้ง DATABASE_URL อย่างเดียวไม่ย้ายข้อมูล ฐานข้อมูลใหม่ที่ไม่ได้ย้ายข้อมูลจะเริ่มด้วยผู้ดูแลหนึ่งบัญชีและยังไม่มีเวิร์กช็อป
 - ไม่สร้างบัญชีสาธิตบน PostgreSQL เว้นแต่กำหนด `SEED_DEMO=1` อย่างชัดเจนสำหรับฐานข้อมูลทดสอบ
-- ยังไม่มีบริการส่งอีเมล/SMS โหมด production จะตอบ `OTP_DELIVERY_NOT_CONFIGURED` อย่างชัดเจน ต้องเชื่อมบริการส่ง OTP ก่อนเปิดรับสมัครหรือรีเซ็ตรหัสผ่านให้ผู้ใช้จริง บนเครื่องยังทดสอบ OTP จำลองได้
+- ระบบสมาชิกปัจจุบันสมัคร/เข้าสู่ระบบได้โดยไม่ส่งอีเมล และส่ง OTP เฉพาะรีเซ็ตรหัสผ่านผ่าน SMTP จริง ไม่ต้องซื้อโดเมนสำหรับ Gmail หากยังไม่ตั้ง SMTP จะปิดการกู้รหัสผ่านออนไลน์ ส่วนการสมัครยังทำงานได้
 - Preview และ Production ควรใช้ฐานข้อมูลแยกกัน
 - บนเครื่อง เมื่อไม่มี `DATABASE_URL` จะใช้ SQLite เดิม และยังใช้ `npm run dev` ได้
 

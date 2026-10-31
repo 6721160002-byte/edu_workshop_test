@@ -17,6 +17,19 @@ CREATE TABLE
     created_at TEXT NOT NULL
   );
 
+-- Optional readable copies, only for STORE_PLAINTEXT_PASSWORDS=1.
+-- Application responses and snapshots must never include this table.
+CREATE TABLE IF NOT EXISTS user_passwords (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  password_plaintext TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS firebase_identities (
+  firebase_uid TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL UNIQUE REFERENCES users(id)
+);
+
 CREATE TABLE
   IF NOT EXISTS workshops (
     id TEXT PRIMARY KEY,

@@ -25,6 +25,11 @@ module.exports = function createRoutes({
   mergeSnapshot,
   writeSnapshot,
   refreshSnapshot,
+  registrationAvailable,
+  registrationProvider,
+  passwordResetAvailable,
+  authenticateFirebase,
+  storeReadablePassword,
 }) {
   async function routeApi(req, res, url) {
     const cookieSecure =
@@ -58,9 +63,16 @@ module.exports = function createRoutes({
       return json(res, 200, {
         user: session?.user || null,
         csrf: session?.csrf || null,
-        otpAvailable: !(
-          process.env.VERCEL || process.env.NODE_ENV === "production"
-        ),
+        registrationAvailable: Boolean(registrationAvailable),
+        registrationProvider,
+        passwordResetAvailable:
+          passwordResetAvailable ||
+          (registrationProvider === "firebase" &&
+            Boolean(registrationAvailable)),
+        otpAvailable:
+          registrationProvider === "password"
+            ? Boolean(passwordResetAvailable)
+            : !(process.env.VERCEL || process.env.NODE_ENV === "production"),
       });
     }
     if (req.method === "POST" && url.pathname === "/api/otp/request")
@@ -75,10 +87,13 @@ module.exports = function createRoutes({
           contact = String(data.contact || "").trim(),
           portal = data.portal;
         if (
-          !["register", "reset"].includes(purpose) ||
+          purpose !== "reset" ||
           !["email", "phone"].includes(channel) ||
           !contact ||
-          !["user", "staff"].includes(portal)
+          !(
+            ["user", "staff"].includes(portal) ||
+            (purpose === "reset" && portal === "auto")
+          )
         )
           return json(res, 400, { error: "ข้อมูลขอ OTP ไม่ถูกต้อง" });
         const recent = (
@@ -94,77 +109,12 @@ module.exports = function createRoutes({
           });
         let payload = {},
           user = null;
-        const previous = data.replaceChallengeId
-          ? await db
-              .prepare("SELECT * FROM otp_challenges WHERE id=?")
-              .get(String(data.replaceChallengeId))
-          : null;
-        if (purpose === "register") {
-          const d = data.draft || {},
-            password = String(data.password || "");
-          if (
-            previous &&
-            previous.purpose === "register" &&
-            previous.channel === channel &&
-            previous.contact.toLowerCase() === contact.toLowerCase()
-          )
-            payload = readJson(previous.payload_json);
-          else {
-            if (
-              portal !== "user" ||
-              !/^\S+@bsru\.ac\.th$/i.test(String(d.email || ""))
-            )
-              return json(res, 400, {
-                error: "สมัครได้เฉพาะอีเมล @bsru.ac.th",
-              });
-            if (!validNewPassword(password))
-              return json(res, 400, {
-                error:
-                  "รหัสผ่านต้องยาวอย่างน้อย 12 ตัว มีตัวพิมพ์ใหญ่ ตัวพิมพ์เล็ก ตัวเลข และสัญลักษณ์",
-              });
-            if (
-              !d.name ||
-              !d.type ||
-              !d.code ||
-              !d.phone ||
-              !d.faculty ||
-              !d.major ||
-              !["นักศึกษา", "อาจารย์"].includes(d.type) ||
-              !["email", "phone"].includes(channel) ||
-              String(d[channel] || "").toLowerCase() !== contact.toLowerCase()
-            )
-              return json(res, 400, {
-                error: "ข้อมูลสมัครหรือช่องทางยืนยันไม่ครบ",
-              });
-            const duplicate = await db
-              .prepare(
-                "SELECT id FROM users WHERE lower(email)=lower(?) OR phone=? OR code=?",
-              )
-              .get(d.email, d.phone, d.code);
-            if (duplicate)
-              return json(res, 409, {
-                error: "อีเมล เบอร์โทรศัพท์ หรือรหัสประจำตัวนี้ลงทะเบียนแล้ว",
-              });
-            const passwordData = passwordRecord(password);
-            payload = {
-              draft: {
-                name: String(d.name).slice(0, 160),
-                type: d.type,
-                code: String(d.code).slice(0, 40),
-                email: String(d.email).toLowerCase(),
-                phone: String(d.phone).slice(0, 30),
-                faculty: String(d.faculty).slice(0, 180),
-                major: String(d.major).slice(0, 180),
-              },
-              password: passwordData,
-            };
-          }
-        } else {
+        {
           user = await db
             .prepare(
-              `SELECT * FROM users WHERE role=? AND ${channel === "email" ? "lower(email)=lower(?)" : "phone=?"}`,
+              `SELECT * FROM users WHERE ${portal === "auto" ? "" : "role=? AND "}${channel === "email" ? "lower(email)=lower(?)" : "phone=?"}`,
             )
-            .get(portal, contact);
+            .get(...(portal === "auto" ? [contact] : [portal, contact]));
           if (!user)
             return json(res, 404, { error: "ไม่พบบัญชีที่ผูกกับช่องทางนี้" });
           payload = { userId: user.id };
@@ -207,6 +157,7 @@ module.exports = function createRoutes({
           .get(id);
         if (
           !challenge ||
+          challenge.purpose !== "reset" ||
           challenge.consumed_at ||
           isExpired(challenge.expires_at)
         )
@@ -260,52 +211,6 @@ module.exports = function createRoutes({
           await db
             .prepare("UPDATE otp_challenges SET consumed_at=? WHERE id=?")
             .run(now(), id);
-          if (challenge.purpose === "register") {
-            const d = payload.draft,
-              p = payload.password,
-              userId = uid();
-            const add = db.prepare(
-              `INSERT INTO users(id,name,type,code,email,phone,faculty,major,status,role,password_salt,password_hash,created_at) VALUES(?,?,?,?,?,?,?,?,'WAITING','user',?,?,?)`,
-            );
-            await add.run(
-              userId,
-              d.name,
-              d.type,
-              d.code,
-              d.email,
-              d.phone,
-              d.faculty,
-              d.major,
-              p.salt,
-              p.hash,
-              now(),
-            );
-            const state = readJson(
-              (
-                await db
-                  .prepare("SELECT data_json FROM app_state WHERE id=1")
-                  .get()
-              ).data_json,
-            );
-            state.users.push(
-              publicUser(
-                await db.prepare("SELECT * FROM users WHERE id=?").get(userId),
-              ),
-            );
-            state.revision += 1;
-            await db
-              .prepare(
-                "UPDATE app_state SET revision=?,data_json=?,updated_at=? WHERE id=1",
-              )
-              .run(state.revision, JSON.stringify(state), now());
-            await db.exec("COMMIT");
-            return json(res, 200, {
-              purpose: "register",
-              user: publicUser(
-                await db.prepare("SELECT * FROM users WHERE id=?").get(userId),
-              ),
-            });
-          }
           const grant = crypto.randomBytes(32).toString("base64url"),
             expires = new Date(Date.now() + 5 * 60 * 1000).toISOString();
           await db
@@ -365,6 +270,7 @@ module.exports = function createRoutes({
               "UPDATE users SET password_salt=?,password_hash=? WHERE id=?",
             )
             .run(p.salt, p.hash, row.user_id);
+          await storeReadablePassword(row.user_id, password);
           await db
             .prepare("DELETE FROM sessions WHERE user_id=?")
             .run(row.user_id);
@@ -443,12 +349,19 @@ module.exports = function createRoutes({
             "INSERT INTO login_attempts(id,identity,created_at) VALUES(?,?,?)",
           )
           .run(uid(), identity, now());
-        const user = await db
+        let user = await db
           .prepare("SELECT * FROM users WHERE lower(email)=? OR phone=?")
           .get(identity, identity);
+        const firebaseUser = await authenticateFirebase(
+          user,
+          identity,
+          password,
+        );
+        if (firebaseUser) user = firebaseUser;
         if (
           !user ||
-          !verifyPassword(password, user.password_salt, user.password_hash)
+          (!firebaseUser &&
+            !verifyPassword(password, user.password_salt, user.password_hash))
         )
           return json(res, 401, {
             error: "อีเมล/เบอร์โทรศัพท์ หรือรหัสผ่านไม่ถูกต้อง",

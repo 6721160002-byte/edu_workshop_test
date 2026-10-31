@@ -2849,20 +2849,156 @@ td b {
 }
 
 /* Visible, complete brand header. */
-.nav .brand { display:flex; align-items:center; gap:16px; min-width:0; }
-.nav .brand .brand-copy { display:flex; flex-direction:column; gap:3px; min-width:0; }
-.nav .brand .brand-title { display:block; margin:0; font-size:26px; line-height:1.25; font-weight:600; letter-spacing:-.6px; color:#292237; white-space:nowrap; }
-.nav .brand .brand-title > span { color:#824899; font-weight:500; }
-.nav .brand .brand-subtitle { font-size:15px; line-height:1.55; color:#554b61; }
-.nav .brand .brand-institution { font-size:12px; line-height:1.5; color:#746a80; }
-@media(max-width:1100px) { .nav .header-motto { display:none; } }
-@media(max-width:720px) { .nav .brand { gap:10px; } .nav .brand .brand-title { font-size:20px; } .nav .brand .brand-subtitle { font-size:13px; } .nav .brand .brand-institution { display:none; } .nav .navin { flex-wrap:wrap; } }
-@media(max-width:380px) { .nav .brand .brand-title { font-size:18px; } .nav .brand .brand-subtitle { font-size:12px; } }
+.nav .brand {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+.nav .brand .brand-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.nav .brand .brand-title {
+  display: block;
+  margin: 0;
+  font-size: 26px;
+  line-height: 1.25;
+  font-weight: 600;
+  letter-spacing: -0.6px;
+  color: #292237;
+  white-space: nowrap;
+}
+.nav .brand .brand-title > span {
+  color: #824899;
+  font-weight: 500;
+}
+.nav .brand .brand-subtitle {
+  font-size: 15px;
+  line-height: 1.55;
+  color: #554b61;
+}
+.nav .brand .brand-institution {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #746a80;
+}
+@media (max-width: 1100px) {
+  .nav .header-motto {
+    display: none;
+  }
+}
+@media (max-width: 720px) {
+  .nav .brand {
+    gap: 10px;
+  }
+  .nav .brand .brand-title {
+    font-size: 20px;
+  }
+  .nav .brand .brand-subtitle {
+    font-size: 13px;
+  }
+  .nav .brand .brand-institution {
+    display: none;
+  }
+  .nav .navin {
+    flex-wrap: wrap;
+  }
+}
+@media (max-width: 380px) {
+  .nav .brand .brand-title {
+    font-size: 18px;
+  }
+  .nav .brand .brand-subtitle {
+    font-size: 12px;
+  }
+}
 
+/* Single-column registration and email verification. */
+.registration-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.registration-form .field {
+  width: 100%;
+  margin-bottom: 0;
+}
+.registration-form > .btn.primary {
+  width: 100%;
+  min-height: 48px;
+  margin-top: 12px;
+}
+.field-error {
+  color: #b4233b;
+  font-size: 13px;
+  margin: -4px 0 8px;
+}
+.field-error:empty {
+  display: none;
+}
+.field input[aria-invalid="true"] {
+  border-color: #b4233b;
+}
+.dialog:has(.registration-form),
+.dialog:has(#email-otp-form) {
+  max-width: 560px;
+}
+.dialog [hidden] {
+  display: none !important;
+}
+#email-otp-form .primary,
+#email-edit-form .primary {
+  width: 100%;
+  min-height: 48px;
+}
+#email-otp-form input {
+  font-size: 24px;
+  letter-spacing: 0.22em;
+}
+.dialog:has(#email-otp-form) .row {
+  flex-wrap: wrap;
+}
 
 /* Thai brand names in the shared header on every page. */
-.nav .brand .brand-title { font-size:22px; line-height:1.5; letter-spacing:-.3px; white-space:normal; color:#292237; }
-.nav .brand .brand-institution { display:block; font-size:14px; line-height:1.65; color:#6c6278; }
-.nav .brand .brand-copy { gap:4px; }
-@media(max-width:720px) { .nav .brand .brand-title { font-size:18px; } .nav .brand .brand-institution { display:block; font-size:12px; } .nav .brand .brand-copy { max-width:290px; } }
-@media(max-width:380px) { .nav .brand .brand-title { font-size:16px; } .nav .brand .brand-institution { font-size:12px; } .nav .brand .brand-copy { max-width:235px; } }
+.nav .brand .brand-title {
+  font-size: 22px;
+  line-height: 1.5;
+  letter-spacing: -0.3px;
+  white-space: normal;
+  color: #292237;
+}
+.nav .brand .brand-institution {
+  display: block;
+  font-size: 14px;
+  line-height: 1.65;
+  color: #6c6278;
+}
+.nav .brand .brand-copy {
+  gap: 4px;
+}
+@media (max-width: 720px) {
+  .nav .brand .brand-title {
+    font-size: 18px;
+  }
+  .nav .brand .brand-institution {
+    display: block;
+    font-size: 12px;
+  }
+  .nav .brand .brand-copy {
+    max-width: 290px;
+  }
+}
+@media (max-width: 380px) {
+  .nav .brand .brand-title {
+    font-size: 16px;
+  }
+  .nav .brand .brand-institution {
+    font-size: 12px;
+  }
+  .nav .brand .brand-copy {
+    max-width: 235px;
+  }
+}

@@ -4,17 +4,9 @@ const path = require("node:path");
 const { ROOT, DB_FILE } = require("../config");
 module.exports = async function openDatabase() {
   if (process.env.DATABASE_URL) {
-    const { Pool, types } = require("pg");
-    types.setTypeParser(20, Number);
+    const { createPool } = require("./pool");
     const { createPostgresDatabase } = require("./postgres");
-    const db = createPostgresDatabase(
-      new Pool({
-        connectionString: process.env.DATABASE_URL,
-        max: 3,
-        connectionTimeoutMillis: 15000,
-        idleTimeoutMillis: 10000,
-      }),
-    );
+    const db = createPostgresDatabase(createPool());
     try {
       await db.initialize();
       return db;

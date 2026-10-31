@@ -6,7 +6,10 @@
     apiSaveCount = 0,
     apiSaveEpoch = 0,
     apiPollTimer = null;
-  let otpAvailable = false;
+  let otpAvailable = false,
+    registrationAvailable = false,
+    registrationProvider = "password",
+    passwordResetAvailable = false;
   let syncMessage = "กำลังเชื่อมต่อ…";
   function updateSync(message) {
     syncMessage = message;
@@ -32,7 +35,12 @@
     if (!response.ok)
       throw Object.assign(
         new Error(payload.error || "เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ"),
-        { status: response.status },
+        {
+          status: response.status,
+          field: payload.field,
+          code: payload.code,
+          registration: payload.registration,
+        },
       );
     return payload;
   }
@@ -406,7 +414,7 @@
       ratingEvent: uid(),
     });
   let state = {
-      portal: null,
+      portal: "user",
       userId: null,
       page: "dashboard",
       view: "open",
@@ -604,12 +612,11 @@
     const unread = u
       ? store.notifications.filter((n) => n.userId === u.id && !n.readAt).length
       : 0;
-    return `<a class="skip-link" href="#main-content">ข้ามไปยังเนื้อหา</a><div class="app-frame ${u ? "is-authenticated" : "is-public"} ${!u && !state.portal ? "is-role-selection" : ""}">
+    return `<a class="skip-link" href="#main-content">ข้ามไปยังเนื้อหา</a><div class="app-frame ${u ? "is-authenticated" : "is-public"}">
       <header class="nav"><div class="wrap navin">
         <div class="brand"><div class="brandmark app-logo"><img src="${LOGO}" alt="BSRU Workshop"></div><div class="brand-copy"><b class="brand-title">ระบบจัดการอบรมและเวิร์กช็อป</b><div class="brand-institution">มหาวิทยาลัยราชภัฏบ้านสมเด็จเจ้าพระยา</div></div></div>
         ${u ? `<div class="workspace-label">พื้นที่ทำงาน <span>/</span> <b>${esc(active)}</b></div>` : '<span class="header-motto"><span class="status-dot"></span> เรียนรู้วันนี้ เติบโตได้ทุกวัน</span>'}
         <div class="header-actions">${u ? `<span class="role-pill ${a || state.portal === "staff" ? "staff-role" : ""}"><i class="fa-solid ${state.portal === "staff" ? "fa-shield-halved" : "fa-graduation-cap"}" aria-hidden="true"></i>${state.portal === "staff" ? "เจ้าหน้าที่" : "ผู้เรียน"}</span>` : ""}
-        ${!u && state.portal ? '<button class="btn small" data-action="switch">← เลือกกลุ่มผู้ใช้งานใหม่</button>' : ""}
         ${member() ? `<button class="btn icon-button" data-action="page" data-id="notifications" aria-label="การแจ้งเตือน ${unread} รายการที่ยังไม่อ่าน"><i class="fa-regular fa-bell" aria-hidden="true"></i>${unread ? '<span class="notification-dot"></span>' : ""}</button>` : ""}
         ${u ? `<span class="header-avatar" aria-label="${esc(u.name)}">${esc(Array.from(u.name)[0])}</span><button class="btn icon-button mobile-action" data-action="logout" aria-label="ออกจากระบบ"><i class="fa-solid fa-arrow-right-from-bracket" aria-hidden="true"></i></button>` : ""}</div>
       </div></header>
@@ -641,7 +648,7 @@
           },
         ];
   }
-  function loginPromo(a) {
+  function loginPromo() {
     const items = promotionItems();
     const index =
       ((state.promoSlide % items.length) + items.length) % items.length;
@@ -656,45 +663,8 @@
         });
     return `<div class="login-promo" data-promo-swipe="true" aria-label="ประชาสัมพันธ์เวิร์กช็อป เลื่อนเพื่อดูรายการอื่น"><img class="login-promo-image" src="${esc(item.cover || PHOTOS.team)}" alt="${esc(item.title)}" draggable="false"><div class="login-promo-shade"></div><div class="login-promo-content"><div class="login-promo-top"><span class="login-promo-kicker">${fallback ? "BSRU WORKSHOP" : "UPCOMING WORKSHOP"}</span><span class="login-promo-count">${index + 1} / ${items.length}</span></div><div class="login-promo-copy"><h1>${esc(item.title)}</h1><p>${esc(item.description || "เปิดประสบการณ์ใหม่ เติมทักษะ และเติบโตไปกับชุมชน BSRU")}</p><div class="login-promo-meta"><span><i class="fa-regular fa-calendar" aria-hidden="true"></i> ${date}</span>${!fallback && item.place ? `<span><i class="fa-solid fa-location-dot" aria-hidden="true"></i> ${esc(item.place)}</span>` : ""}</div></div><div class="login-promo-bottom"><span><i class="fa-solid fa-graduation-cap" aria-hidden="true"></i> เปิดโอกาสใหม่ไปด้วยกัน</span><span class="login-promo-hint">ปัดหรือเลื่อนเพื่อดูเพิ่มเติม</span></div></div><div class="login-promo-controls"><button type="button" data-action="promo-slide" data-id="prev" aria-label="ประชาสัมพันธ์ก่อนหน้า">←</button>${items.map((_, i) => `<button type="button" data-action="promo-slide" data-id="${i}" class="${i === index ? "active" : ""}" aria-label="ประชาสัมพันธ์รายการที่ ${i + 1}"></button>`).join("")}<button type="button" data-action="promo-slide" data-id="next" aria-label="ประชาสัมพันธ์ถัดไป">→</button></div></div>`;
   }
-  function selector() {
-    return `<section class="portal role-selector" aria-labelledby="role-page-title">
-  <div class="portal-intro">
-    <span class="role-eyebrow"><span aria-hidden="true"></span> BSRU WORKSHOP</span>
-    <h1 id="role-page-title">ทุกการเรียนรู้<br>เริ่มต้นที่<span>โอกาสใหม่</span></h1>
-    <p class="portal-description">พื้นที่สำหรับค้นพบเวิร์กช็อป พัฒนาทักษะ<br class="role-desktop-break"> และติดตามการเรียนรู้ของคุณในที่เดียว</p>
-    <div class="portal-photo"><img src="${PHOTOS.team}" alt="ผู้เข้าร่วมแลกเปลี่ยนความรู้และทำกิจกรรมร่วมกัน" fetchpriority="high"><div class="role-photo-caption"><span class="role-photo-mark" aria-hidden="true">✦</span><span>เรียนรู้วันนี้ ต่อยอดได้ทุกวัน</span></div></div>
-    <p class="role-brand-note">เรียนรู้ · เชื่อมต่อ · เติบโตไปด้วยกัน</p>
-  </div>
-  <div class="portal-options">
-    <div class="portal-options-heading"><span class="role-step">เริ่มต้นใช้งาน</span><h2>เลือกพื้นที่ของคุณ</h2><p class="muted">เลือกกลุ่มผู้ใช้งานเพื่อเข้าสู่ระบบ</p></div>
-    <div class="choices">
-      <button type="button" class="panel choice learner-choice" data-action="portal" data-id="user" aria-labelledby="learner-role-title" aria-describedby="learner-role-description">
-        <div class="choice-heading"><span class="choice-icon"><i class="fa-solid fa-user-graduate" aria-hidden="true"></i></span><span class="role-card-label">สำหรับผู้เข้าร่วมอบรม</span><span class="role-number" aria-hidden="true">01</span></div>
-        <h3 id="learner-role-title">นักศึกษา / อาจารย์ / เจ้าหน้าที่</h3>
-        <p id="learner-role-description">ค้นหาเวิร์กช็อป ลงทะเบียนเข้าร่วม<br>และติดตามชั่วโมงอบรมสะสม</p>
-        <span class="choice-link">เข้าสู่ระบบผู้เข้าร่วม <span aria-hidden="true">→</span></span>
-      </button>
-      <button type="button" class="panel choice staff-choice" data-action="portal" data-id="staff" aria-labelledby="admin-role-title" aria-describedby="admin-role-description">
-        <div class="choice-heading"><span class="choice-icon"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i></span><span class="role-card-label">สำหรับผู้ดูแลระบบ</span><span class="role-number" aria-hidden="true">02</span></div>
-        <h3 id="admin-role-title">เจ้าหน้าที่ (แอดมิน)</h3>
-        <p id="admin-role-description">จัดการกิจกรรม อนุมัติบัญชีผู้ใช้งาน<br>และดูแลรายชื่อผู้เข้าร่วมอบรม</p>
-        <span class="choice-link">เข้าสู่ระบบแอดมิน <span aria-hidden="true">→</span></span>
-      </button>
-    </div>
-    <p class="portal-help"><i class="fa-solid fa-circle-info" aria-hidden="true"></i><span>เจ้าหน้าที่ที่ต้องการเข้าร่วมอบรม เลือกกลุ่มผู้เข้าร่วม</span></p>
-  </div>
-</section>`;
-  }
-  function loginWithPromo() {
-    const a = state.portal === "staff";
-    return login().replace(
-      /<div class="intro">[\s\S]*?<\/div><\/div><section class="form">/,
-      `<div class="intro">${loginPromo(a)}</div><section class="form">`,
-    );
-  }
   function login() {
-    const a = state.portal === "staff";
-    return `<section class="login"><div class="intro"><img class="login-cover" src="${PHOTOS.team}" alt=""><div class="login-copy"><div class="eyebrow" style="color:#ffcc89">${a ? "MANAGE & CONNECT" : "YOUR NEXT CHAPTER"}</div><h1>${a ? "จัดการทุกกิจกรรม<br>ได้ในพื้นที่เดียว" : "ทักษะใหม่<br>โอกาสใหม่ เริ่มที่นี่"}</h1><p>${a ? "ดูแลเวิร์กช็อปและผู้เข้าร่วม พร้อมเชื่อมต่อข้อมูลถึงผู้ใช้งานทันที" : "ค้นพบเวิร์กช็อปที่ใช่ พัฒนาศักยภาพของคุณไปกับชุมชน BSRU"}</p><div class="row space login-promise"><i class="fa-solid fa-graduation-cap" aria-hidden="true"></i><span>LEARNING NEVER STOPS.</span></div></div></div><section class="form"><div class="eyebrow">BSRU WORKSHOP</div><h2>ยินดีต้อนรับ${a ? "เจ้าหน้าที่" : "กลับมา"} 👋</h2><p class="muted">เข้าสู่ระบบ${a ? "สำหรับเจ้าหน้าที่" : "เพื่อเริ่มต้นการเรียนรู้"}</p><form id="login-form">${input("อีเมล หรือ เบอร์โทรศัพท์", "identity", "text", 'autocomplete="username" placeholder="กรอกอีเมลหรือเบอร์โทรศัพท์"')}${input("รหัสผ่าน", "password", "password", 'autocomplete="current-password" minlength="6" placeholder="กรอกรหัสผ่าน"')}<div class="error" id="login-error" role="alert"></div><button class="btn primary login-submit" ${!ready ? "disabled" : ""}>เข้าสู่ระบบ <span aria-hidden="true">→</span></button></form>${!a && otpAvailable ? `<p class="login-register">ยังไม่มีบัญชี? <button class="btn small" data-action="register">สมัครใช้งานใหม่</button></p>` : ""}${otpAvailable ? '<button class="btn login-forgot" data-action="forgot">ลืมรหัสผ่าน</button>' : '<div class="notice space">ระบบสำหรับสมาชิกที่ได้รับอนุมัติ หากต้องการบัญชีหรือกู้รหัสผ่าน กรุณาติดต่อเจ้าหน้าที่ผู้ดูแลระบบ</div>'}${localDemo ? `<details class="demo"><summary><i class="fa-solid fa-flask" aria-hidden="true"></i> บัญชีสำหรับทดลองใช้งาน</summary><div class="demo-content">${a ? "admin1@bsru.ac.th / 0899990001" : "std_demo@bsru.ac.th / 0812345678<br>staff_demo@bsru.ac.th (อาจารย์)"}<br>รหัสผ่านเริ่มต้น: <b>123456</b><br><span class="sub">หากเปลี่ยนรหัสผ่านแล้ว ให้ใช้รหัสผ่านล่าสุด</span>${!ready ? "<br>กำลังเตรียมระบบเข้าสู่ระบบ…" : ""}</div></details>` : ""}</section></section>`;
+    return `<section class="login"><div class="intro">${loginPromo()}</div><section class="form"><div class="eyebrow">BSRU WORKSHOP</div><h2>ยินดีต้อนรับกลับมา 👋</h2><p class="muted">เข้าสู่ระบบเพื่อเริ่มต้นการเรียนรู้</p><form id="login-form">${input("อีเมล หรือ เบอร์โทรศัพท์", "identity", "text", 'autocomplete="username" placeholder="กรอกอีเมลหรือเบอร์โทรศัพท์"')}${input("รหัสผ่าน", "password", "password", 'autocomplete="current-password" minlength="6" placeholder="กรอกรหัสผ่าน"')}<div class="error" id="login-error" role="alert"></div><button class="btn primary login-submit" ${!ready ? "disabled" : ""}>เข้าสู่ระบบ <span aria-hidden="true">→</span></button></form>${ready ? `<p class="login-register">ยังไม่มีบัญชี? <button class="btn small" data-action="register">สมัครใช้งานใหม่</button></p>` : ""}${otpAvailable || passwordResetAvailable ? '<button class="btn login-forgot" data-action="forgot">ลืมรหัสผ่าน</button>' : '<div class="notice space">การกู้รหัสผ่านออนไลน์ยังไม่เปิดให้บริการ กรุณาติดต่อเจ้าหน้าที่ผู้ดูแลระบบ</div>'}${localDemo ? `<details class="demo"><summary><i class="fa-solid fa-flask" aria-hidden="true"></i> บัญชีสำหรับทดลองใช้งาน</summary><div class="demo-content">std_demo@bsru.ac.th / 0812345678<br>staff_demo@bsru.ac.th (อาจารย์)<br>รหัสผ่านเริ่มต้น: <b>123456</b><br><span class="sub">หากเปลี่ยนรหัสผ่านแล้ว ให้ใช้รหัสผ่านล่าสุด</span>${!ready ? "<br>กำลังเตรียมระบบเข้าสู่ระบบ…" : ""}</div></details>` : ""}</section></section>`;
   }
   function title(eyebrow, heading, desc, action = "") {
     return `<div class="row between page-heading"><div><div class="eyebrow">${eyebrow}</div><h1>${heading}</h1><p class="muted" style="margin:0">${desc}</p></div>${action}</div>`;
@@ -1253,9 +1223,7 @@
   });
   function render() {
     let content;
-    if (!state.portal) content = selector();
-    else if (!user())
-      content = state.portal === "staff" ? login() : loginWithPromo();
+    if (!user()) content = login();
     else if (state.page === "dashboard")
       content = staff() ? staffDashboard() : learnerDashboard();
     else if (staff())
@@ -1280,6 +1248,12 @@
     const changed = view !== previousView;
     const hadView = previousView !== null;
     $("#app").innerHTML = shell(content);
+    if (user() && registrationProvider === "password") {
+      const changePassword = document.createElement("button");
+      changePassword.dataset.action = "change-password";
+      changePassword.textContent = "เปลี่ยนรหัสผ่าน";
+      document.querySelector(".sidebar-bottom")?.prepend(changePassword);
+    }
     if (changed) {
       $(".page-stage")?.classList.add("is-entering");
       if (hadView) {
@@ -1316,35 +1290,209 @@
       `<p>${esc(msg)}</p><div class="row" style="justify-content:flex-end"><button class="btn" data-action="close">ไม่ใช่</button><button class="btn primary" data-action="${action}" data-id="${id}">ใช่</button></div>`,
     );
   }
-  function registerModal() {
-    if (state.portal !== "user" || user()) return;
-    if (!otpAvailable)
-      return toast(
-        "การสมัครออนไลน์ยังไม่เปิดให้บริการ กรุณาติดต่อเจ้าหน้าที่ผู้ดูแลระบบ",
+  let emailRegistration = null,
+    emailTimer = null;
+  function saveEmailRegistration() {
+    try {
+      window.sessionStorage?.setItem(
+        "bsru-email-registration",
+        JSON.stringify(emailRegistration),
       );
+    } catch {}
+  }
+  function registrationFieldsError(form, error) {
+    if (!form) return;
+    const field = form.querySelector('[name="' + error.field + '"]');
+    const message = form.querySelector('[data-error="' + error.field + '"]');
+    if (field && message) {
+      message.textContent = error.message;
+      field.setAttribute("aria-invalid", "true");
+      field.focus();
+    } else {
+      const target = form.querySelector(".error");
+      if (target) target.textContent = error.message;
+    }
+  }
+  function registerModal() {
+    if (user()) return;
     openModal(
-      "สมัครใช้งานใหม่",
-      `<p class="muted">ยืนยันช่องทางติดต่อด้วย OTP แล้วรอเจ้าหน้าที่อนุมัติสิทธิ์</p><form id="register-form">${input("ชื่อ-นามสกุล", "name", "text", 'maxlength="120"')}<div class="grid two"><div class="field"><label for="type">ประเภทผู้ใช้งาน</label><select id="type" name="type"><option>นักศึกษา</option><option>อาจารย์</option></select></div>${input("รหัสประจำตัว", "code", "text", 'maxlength="30"')}</div><div class="field"><label for="faculty">คณะ / วิทยาลัย</label><select id="faculty" name="faculty" required><option value="">เลือกคณะ / วิทยาลัย</option>${Object.keys(
-        PROGRAMS,
-      )
-        .map((x) => `<option>${esc(x)}</option>`)
-        .join(
-          "",
-        )}</select></div><div class="field"><label for="major">สาขา / หลักสูตร</label><select id="major" name="major" required disabled><option value="">กรุณาเลือกคณะก่อน</option></select></div><p class="sub">รายชื่อ 81 หลักสูตรตาม <a href="https://course.bsru.ac.th/admission/" target="_blank" rel="noopener">BSRU Admission</a> ตรวจสอบ 27 ต.ค. 2569</p><div class="grid two"><div class="field"><label for="email">อีเมลมหาวิทยาลัย (@bsru.ac.th เท่านั้น)</label><input id="email" name="email" type="email" maxlength="150" autocomplete="email" required pattern="[^@ ]+@[Bb][Ss][Rr][Uu][.][Aa][Cc][.][Tt][Hh]" placeholder="student@bsru.ac.th"></div><div class="field"><label for="phone">เบอร์โทรศัพท์</label><input id="phone" name="phone" type="tel" required pattern="0[0-9]{8,9}" maxlength="10" autocomplete="tel"></div></div><div class="field"><label for="register-channel">ส่ง OTP ยืนยันสมัครสมาชิกไปที่</label><select id="register-channel" name="channel"><option value="email">อีเมล</option><option value="phone">เบอร์โทรศัพท์</option></select></div>${passwordFields("new-password", "confirm-password")}<div class="error" id="form-error" role="alert"></div><button class="btn primary" type="submit">รับ OTP เพื่อยืนยันสมัครสมาชิก</button></form>`,
+      "สมัครสมาชิก",
+      `<p class="muted">${registrationProvider === "password" ? "กรอกข้อมูลและตั้งรหัสผ่าน สมัครสำเร็จแล้วเข้าสู่ระบบได้ทันที" : "กรอกข้อมูลและตั้งรหัสผ่าน จากนั้นยืนยันอีเมลเพื่อเริ่มใช้งาน"}</p>
+      ${!registrationAvailable ? '<div class="notice">ระบบสมัครสมาชิกยังไม่พร้อม กรุณาติดต่อผู้ดูแลระบบเพื่อตั้งค่าการยืนยันอีเมล</div>' : ""}
+      <form id="email-register-form" class="registration-form" novalidate>
+      ${input("ชื่อ-นามสกุล", "name", "text", 'autocomplete="name" maxlength="120"')}<p class="field-error" data-error="name" role="alert"></p>
+      <div class="field"><label for="registration-type">ประเภทผู้ใช้งาน</label><select id="registration-type" name="type"><option>นักศึกษา</option><option>อาจารย์</option><option>เจ้าหน้าที่</option></select></div><p class="field-error" data-error="type" role="alert"></p>
+      ${input("รหัสประจำตัว", "code", "text", 'maxlength="30"')}<p class="field-error" data-error="code" role="alert"></p>
+      ${input("เบอร์โทรศัพท์", "phone", "tel", 'autocomplete="tel" maxlength="10"')}<p class="field-error" data-error="phone" role="alert"></p>
+      ${input("อีเมลมหาวิทยาลัย (@bsru.ac.th)", "email", "email", 'autocomplete="email" maxlength="150" placeholder="student@bsru.ac.th"')}<p class="field-error" data-error="email" role="alert"></p>
+      <p id="registration-password-hint" class="sub">${passwordPolicy}</p>
+      ${input("รหัสผ่าน", "password", "password", 'autocomplete="new-password" minlength="12" maxlength="128" aria-describedby="registration-password-hint"')}<p class="field-error" data-error="password" role="alert"></p>
+      <div class="error" role="alert"></div><button class="btn primary" type="submit" ${!registrationAvailable ? "disabled" : ""}>สมัครสมาชิก</button>
+      </form>`,
     );
+  }
+  function firebaseLinkModal(email, verified = false) {
+    clearInterval(emailTimer);
+    openModal(
+      verified ? "ยืนยันอีเมลแล้ว" : "ตรวจอีเมลเพื่อยืนยันบัญชี",
+      `<p>${verified ? "อีเมลนี้ยืนยันแล้ว กลับไปเข้าสู่ระบบด้วยรหัสผ่านที่ตั้งไว้ได้เลย" : `เปิดอีเมลที่ส่งไปยัง <b>${esc(email)}</b> แล้วคลิกลิงก์ยืนยัน จากนั้นกลับมาเข้าสู่ระบบด้วยอีเมลและรหัสผ่านที่ตั้งไว้`}</p>
+      ${!verified ? `<p class="sub">ตรวจทั้ง Inbox และ Spam หากไม่พบอีเมล ให้รออย่างน้อย 60 วินาทีแล้วขอส่งลิงก์อีกครั้ง ข้อมูลสมัครมีอายุ 24 ชั่วโมง</p><details class="space"><summary>ขอส่งลิงก์ยืนยันอีกครั้ง</summary><form id="firebase-resend-form" class="space" novalidate>${input("อีเมลมหาวิทยาลัย", "email", "email", `value="${esc(email)}" autocomplete="email" maxlength="150"`)}${input("รหัสผ่านที่ตั้งไว้", "password", "password", 'autocomplete="current-password" maxlength="128"')}<div class="error" role="alert"></div><button class="btn" type="submit">ส่งลิงก์อีกครั้ง</button></form></details>` : ""}
+      <button class="btn primary space" data-action="firebase-login" data-email="${esc(email)}">กลับไปเข้าสู่ระบบ</button>`,
+    );
+  }
+  function firebaseResetModal() {
+    openModal(
+      "ลืมรหัสผ่าน",
+      `<p>กรอกอีเมลเพื่อรับลิงก์ตั้งรหัสผ่านใหม่</p><p class="sub">สำหรับบัญชีที่สมัครด้วยระบบยืนยันลิงก์อีเมล บัญชีเดิมก่อนเปลี่ยนระบบให้ติดต่อเจ้าหน้าที่</p><form id="firebase-reset-form" novalidate>${input("อีเมลมหาวิทยาลัย (@bsru.ac.th)", "email", "email", 'autocomplete="email" maxlength="150"')}<div class="error" role="alert"></div><button class="btn primary" type="submit">ส่งลิงก์ตั้งรหัสผ่านใหม่</button></form>`,
+    );
+  }
+  function emailOtpModal() {
+    clearInterval(emailTimer);
+    openModal(
+      "ยืนยันอีเมล",
+      `<p>กรอกรหัส 6 หลักเพื่อยืนยัน <b>${esc(emailRegistration.maskedEmail)}</b></p>
+      <p class="sub" data-email-expiry></p><form id="email-otp-form" novalidate>
+      ${input("รหัสยืนยันอีเมล", "otp", "text", 'inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}"')}
+      <p class="field-error" data-error="otp" role="alert"></p><div class="error" role="alert"></div><button class="btn primary" type="submit">ยืนยันอีเมล</button></form>
+      <div class="row space"><button class="btn" data-action="email-resend">ส่งรหัสอีกครั้ง</button><button class="btn" data-action="email-edit">แก้ไขอีเมล</button></div>
+      <form id="email-edit-form" hidden novalidate class="space">${input("อีเมลใหม่ (@bsru.ac.th)", "email", "email", 'autocomplete="email" maxlength="150"')}<p class="field-error" data-error="email" role="alert"></p><div class="error" role="alert"></div><button class="btn primary" type="submit">ส่งรหัสไปยังอีเมลใหม่</button></form>
+      <p class="sub" data-email-status role="status"></p><button class="btn" data-action="registration-login">กลับไปเข้าสู่ระบบ</button>`,
+    );
+    const tick = () => {
+      const target = document.querySelector("[data-email-expiry]");
+      if (!target) {
+        clearInterval(emailTimer);
+        return;
+      }
+      const remaining = Math.max(
+        0,
+        Math.ceil(
+          (Date.parse(emailRegistration.expiresAt) - Date.now()) / 1000,
+        ),
+      );
+      target.textContent = remaining
+        ? "รหัสหมดอายุใน " +
+          Math.floor(remaining / 60) +
+          ":" +
+          String(remaining % 60).padStart(2, "0") +
+          " นาที"
+        : "รหัสหมดอายุแล้ว กรุณากดส่งรหัสอีกครั้ง";
+      const resend = document.querySelector('[data-action="email-resend"]');
+      const wait = Math.max(
+        0,
+        Math.ceil((Date.parse(emailRegistration.resendAt) - Date.now()) / 1000),
+      );
+      if (resend) {
+        resend.disabled = Boolean(wait) || emailBusy;
+        resend.textContent = wait
+          ? "ส่งรหัสอีกครั้ง (" + wait + " วินาที)"
+          : "ส่งรหัสอีกครั้ง";
+      }
+    };
+    tick();
+    emailTimer = setInterval(tick, 1000);
+  }
+  let emailBusy = false;
+  async function emailAction(action, extra = {}) {
+    if (emailBusy) return;
+    emailBusy = true;
+    document
+      .querySelectorAll(".dialog button")
+      .forEach((b) => (b.disabled = true));
+    const status = document.querySelector("[data-email-status]");
+    if (status)
+      status.textContent =
+        action === "verify" ? "กำลังตรวจสอบ…" : "กำลังส่งรหัส…";
+    try {
+      const result = await apiRequest("/api/registration/" + action, {
+        method: "POST",
+        body: JSON.stringify({ ...emailRegistration, ...extra }),
+      });
+      if (action === "verify") {
+        apiCsrf = result.csrf;
+        emailRegistration = null;
+        saveEmailRegistration();
+        clearInterval(emailTimer);
+        Object.assign(store, (await apiRequest("/api/store")).store);
+        state.portal = result.user.role;
+        state.userId = result.user.id;
+        state.page = "dashboard";
+        closeModal();
+        startApiPolling();
+        render();
+        toast("ยืนยันอีเมลสำเร็จ ยินดีต้อนรับ");
+      } else {
+        emailRegistration = { ...emailRegistration, ...result };
+        saveEmailRegistration();
+        emailBusy = false;
+        emailOtpModal();
+      }
+    } catch (error) {
+      if (error.registration) {
+        emailRegistration = { ...emailRegistration, ...error.registration };
+        saveEmailRegistration();
+        emailBusy = false;
+        emailOtpModal();
+      }
+      registrationFieldsError(
+        document.querySelector(
+          action === "email" && !error.registration
+            ? "#email-edit-form"
+            : "#email-otp-form",
+        ),
+        error,
+      );
+      if (status) status.textContent = "";
+    } finally {
+      emailBusy = false;
+      document
+        .querySelectorAll(".dialog button")
+        .forEach((b) => (b.disabled = false));
+    }
+  }
+  async function restoreEmailRegistration() {
+    if (registrationProvider !== "resend") return;
+    try {
+      const pending = JSON.parse(
+        window.sessionStorage?.getItem("bsru-email-registration") || "null",
+      );
+      if (!pending || user()) return;
+      const result = await apiRequest("/api/registration/status", {
+        method: "POST",
+        body: JSON.stringify(pending),
+      });
+      emailRegistration = { ...pending, ...result };
+      emailOtpModal();
+    } catch {
+      try {
+        window.sessionStorage?.removeItem("bsru-email-registration");
+      } catch {}
+    }
   }
   function passwordFields(name, confirmation) {
     return `${input("รหัสผ่านใหม่", name, "password", 'autocomplete="new-password" minlength="12" maxlength="128" aria-describedby="password-hint"')}${input("ยืนยันรหัสผ่าน", confirmation, "password", 'autocomplete="new-password" minlength="12" maxlength="128"')}<p class="sub" id="password-hint">${passwordPolicy}<br>เช่น ใช้วลีที่จำได้ผสมอักษร ตัวเลข และสัญลักษณ์ โดยไม่ใช้ข้อมูลส่วนตัว</p><div class="sub" id="password-strength" aria-live="polite"></div>`;
   }
   function forgotModal() {
-    if (!state.portal || user()) return;
+    if (!state.portal) return;
+    if (registrationProvider === "password") {
+      if (!otpAvailable)
+        return toast(
+          "ยังไม่ได้ตั้งค่าอีเมลสำหรับส่ง OTP กรุณาติดต่อผู้ดูแลระบบ",
+        );
+      openModal(
+        user() ? "เปลี่ยนรหัสผ่าน" : "ลืมรหัสผ่าน",
+        `<p class="muted">กรอกอีเมลที่ใช้สมัครสมาชิก ระบบจะส่ง OTP 6 หลักเพื่อยืนยันก่อนตั้งรหัสผ่านใหม่</p><form id="forgot-form" class="space">${input("อีเมลที่ใช้สมัครสมาชิก", "reset-contact", "email", `autocomplete="email" maxlength="150" ${user() ? `value="${esc(user().email)}" readonly` : ""}`)}<div class="error" role="alert"></div><button class="btn primary" type="submit">ส่ง OTP ไปยังอีเมล</button></form>`,
+      );
+      return;
+    }
+    if (passwordResetAvailable) return firebaseResetModal();
     if (!otpAvailable)
       return toast(
         "การกู้รหัสผ่านออนไลน์ยังไม่เปิดให้บริการ กรุณาติดต่อเจ้าหน้าที่ผู้ดูแลระบบ",
       );
     openModal(
       "ลืมรหัสผ่าน",
-      `<p class="muted">เลือกช่องทางที่ผูกกับบัญชี ${state.portal === "staff" ? "เจ้าหน้าที่" : "ผู้ใช้"} เพื่อรับ OTP แล้วตั้งรหัสผ่านใหม่</p><div class="notice">โหมดสาธิต: OTP จะแสดงในกล่องข้อความของแอป ไม่มีการส่งอีเมลหรือ SMS จริง</div><form id="forgot-form" class="space"><div class="field"><label for="recovery-channel">รับ OTP ผ่าน</label><select id="recovery-channel" name="channel"><option value="email">อีเมล</option><option value="phone">เบอร์โทรศัพท์</option></select></div>${input("อีเมลหรือเบอร์โทรศัพท์ที่ผูกกับบัญชี", "reset-contact", "text", 'autocomplete="email tel" maxlength="150"')}<div class="error" role="alert"></div><button class="btn primary">รับ OTP</button></form><p class="sub">บัญชีสาธิต: ผู้ใช้ 0812345678 · อาจารย์ 0899990002 · เจ้าหน้าที่ 0899990001</p>`,
+      `<p class="muted">เลือกช่องทางที่ผูกกับบัญชี ของคุณ เพื่อรับ OTP แล้วตั้งรหัสผ่านใหม่</p><div class="notice">โหมดสาธิต: OTP จะแสดงในกล่องข้อความของแอป ไม่มีการส่งอีเมลหรือ SMS จริง</div><form id="forgot-form" class="space"><div class="field"><label for="recovery-channel">รับ OTP ผ่าน</label><select id="recovery-channel" name="channel"><option value="email">อีเมล</option><option value="phone">เบอร์โทรศัพท์</option></select></div>${input("อีเมลหรือเบอร์โทรศัพท์ที่ผูกกับบัญชี", "reset-contact", "text", 'autocomplete="email tel" maxlength="150"')}<div class="error" role="alert"></div><button class="btn primary">รับ OTP</button></form>`,
     );
   }
   async function issueOtp(data, replaceId) {
@@ -1352,24 +1500,24 @@
       method: "POST",
       body: JSON.stringify({
         purpose: data.purpose,
-        portal: data.portal,
+        portal: data.purpose === "reset" ? "auto" : data.portal,
         channel: data.channel,
         contact: data.contact,
         draft: data.draft,
-        password: data.pendingPassword,
         replaceChallengeId: replaceId,
       }),
     });
     for (const [id, c] of otpChallenges)
       if (c.contact === data.contact) otpChallenges.delete(id);
     const { id: unused, ...safeData } = data;
-    delete safeData.pendingPassword;
     const challengeId = result.challengeId;
     otpChallenges.set(challengeId, {
       ...safeData,
       challengeId,
       expires: Date.parse(result.expiresAt),
       attempts: 0,
+      resendAt: Date.parse(result.resendAt || 0),
+      message: result.message,
     });
     currentChallenge = challengeId;
     otpModal(challengeId, result.code || "");
@@ -1377,9 +1525,39 @@
   }
   function otpModal(id, code) {
     const c = otpChallenges.get(id);
+    if (registrationProvider === "password") {
+      openModal(
+        "ยืนยัน OTP",
+        `<p>${esc(c.message || "หากอีเมลนี้มีบัญชี ระบบจะส่ง OTP ไปยังอีเมลที่สมัคร")}</p><p>อีเมล: <b>${esc(c.contact)}</b></p><p class="sub">ใช้ได้ครั้งเดียวภายใน 5 นาที · กรอกผิดได้ไม่เกิน 5 ครั้ง</p><form id="otp-form" data-id="${id}" class="space">${input("รหัส OTP 6 หลัก", "otp", "text", 'inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" autocomplete="one-time-code"')}<div class="error" role="alert"></div><div class="row"><button class="btn primary" type="submit">ยืนยัน OTP</button><button type="button" class="btn" data-action="otp-resend" data-id="${id}">ส่ง OTP อีกครั้ง</button></div></form><p class="sub" data-reset-expiry role="status"></p>`,
+      );
+      clearInterval(emailTimer);
+      const tick = () => {
+        const status = document.querySelector("[data-reset-expiry]");
+        const resend = document.querySelector('[data-action="otp-resend"]');
+        if (!status || !resend) {
+          clearInterval(emailTimer);
+          return;
+        }
+        const remaining = Math.max(
+          0,
+          Math.ceil((c.expires - Date.now()) / 1000),
+        );
+        status.textContent = remaining
+          ? `OTP หมดอายุใน ${Math.floor(remaining / 60)}:${String(remaining % 60).padStart(2, "0")} นาที`
+          : "OTP หมดอายุแล้ว กรุณาขอรหัสใหม่";
+        const wait = Math.max(0, Math.ceil((c.resendAt - Date.now()) / 1000));
+        resend.disabled = wait > 0;
+        resend.textContent = wait
+          ? `ส่ง OTP อีกครั้ง (${wait} วินาที)`
+          : "ส่ง OTP อีกครั้ง";
+      };
+      tick();
+      emailTimer = setInterval(tick, 1000);
+      return;
+    }
     openModal(
       "ยืนยัน OTP",
-      `<p>ช่องทาง: <b>${c.channel === "email" ? "อีเมล" : "เบอร์โทรศัพท์"}</b> · ${esc(c.contact)}</p><div class="otp-inbox"><div class="eyebrow">กล่องรับ OTP จำลอง • ไม่ได้ส่งจริง</div><strong>${esc(code)}</strong><p>ใช้ได้ครั้งเดียวภายใน 5 นาที · กรอกผิดได้ไม่เกิน 5 ครั้ง</p></div><form id="otp-form" data-id="${id}" class="space">${input("รหัส OTP 6 หลัก", "otp", "text", 'inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" autocomplete="one-time-code"')}<div class="error" role="alert"></div><div class="row"><button class="btn primary">ยืนยัน OTP</button><button type="button" class="btn" data-action="otp-resend" data-id="${id}">ขอ OTP ใหม่ (เว้น 60 วินาที)</button></div></form>`,
+      `${c.purpose === "register" ? '<p class="muted">ขั้นตอน 2 / 3 · ยืนยันช่องทางติดต่อก่อนตั้งรหัสผ่าน</p>' : ""}<p>ช่องทาง: <b>${c.channel === "email" ? "อีเมล" : "เบอร์โทรศัพท์"}</b> · ${esc(c.contact)}</p><div class="otp-inbox"><div class="eyebrow">กล่องรับ OTP จำลอง • ไม่ได้ส่งจริง</div><strong>${esc(code)}</strong><p>ใช้ได้ครั้งเดียวภายใน 5 นาที · กรอกผิดได้ไม่เกิน 5 ครั้ง</p></div><form id="otp-form" data-id="${id}" class="space">${input("รหัส OTP 6 หลัก", "otp", "text", 'inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" autocomplete="one-time-code"')}<div class="error" role="alert"></div><div class="row"><button class="btn primary">ยืนยัน OTP</button><button type="button" class="btn" data-action="otp-resend" data-id="${id}">ขอ OTP ใหม่ (เว้น 60 วินาที)</button></div></form>`,
     );
   }
   function ratingModal(id) {
@@ -1472,6 +1650,7 @@
     return commit("ลงทะเบียนสำเร็จ ตรวจสอบได้ที่กิจกรรมของฉัน");
   }
   function clearRecovery() {
+    clearInterval(emailTimer);
     otpChallenges.clear();
     resetGrants.clear();
     currentChallenge = null;
@@ -1576,7 +1755,8 @@
         return confirmModal(
           {
             logout: "ต้องการออกจากระบบจริงใช่ไหม?",
-            switch: "ต้องการออกจากบัญชีนี้และกลับไปเลือกสิทธิ์จริงใช่ไหม?",
+            switch:
+              "ต้องการออกจากบัญชีนี้เพื่อเข้าสู่ระบบด้วยบัญชีอื่นใช่หรือไม่?",
             approve: "ต้องการอนุมัติสิทธิ์ผู้ใช้งานนี้จริงใช่ไหม?",
             attend:
               "ต้องการยืนยันว่าผู้ใช้นี้เข้าร่วมงานและบันทึกชั่วโมงอบรมจริงใช่ไหม?",
@@ -1620,7 +1800,7 @@
       apiCsrf = null;
       state = {
         ...state,
-        portal: null,
+        portal: "user",
         userId: null,
         page: "dashboard",
         view: "open",
@@ -1639,18 +1819,11 @@
         }
       apiCsrf = null;
       state.userId = null;
+      state.portal = "user";
       closeModal();
       return render();
     }
     if (a === "workshop-detail") return workshopDetail(id);
-    if (a === "portal") {
-      clearRecovery();
-      closeModal();
-      state.portal = id;
-      state.userId = null;
-      state.page = "dashboard";
-      return render();
-    }
     if (a === "page") {
       state.page = id;
       state.view = id === "mine" ? "mine" : "open";
@@ -1664,9 +1837,36 @@
       }
       return render();
     }
+    if (a === "firebase-login") {
+      const email = b.dataset.email;
+      closeModal();
+      const identity = document.querySelector('#login-form [name="identity"]');
+      if (identity) identity.value = email;
+      document.querySelector('#login-form [name="password"]')?.focus();
+      return;
+    }
+    if (a === "registration-login") {
+      clearInterval(emailTimer);
+      closeModal();
+      if (b.dataset.email) {
+        const identity = document.querySelector(
+          '#login-form [name="identity"]',
+        );
+        if (identity) identity.value = b.dataset.email;
+        document.querySelector('#login-form [name="password"]')?.focus();
+      }
+      return;
+    }
+    if (a === "email-resend") return emailAction("resend");
+    if (a === "email-edit") {
+      const f = document.querySelector("#email-edit-form");
+      f.hidden = false;
+      f.querySelector("input").focus();
+      return;
+    }
     if (a === "register") return registerModal();
     if (a === "support" && member()) return supportModal();
-    if (a === "forgot") {
+    if (a === "forgot" || a === "change-password") {
       clearRecovery();
       return forgotModal();
     }
@@ -1675,6 +1875,13 @@
       if (!c || c.portal !== state.portal)
         return toast("กรุณาเริ่มขอ OTP ใหม่");
       try {
+        if (registrationProvider === "password") {
+          if (c.resendAt > Date.now()) return;
+          b.disabled = true;
+          b.textContent = "กำลังส่ง OTP…";
+          await issueOtp(c, id);
+          return;
+        }
         if (
           !(await askConfirm(
             "ต้องการขอ OTP ใหม่จริงใช่ไหม? รหัสเดิมจะถูกยกเลิก",
@@ -1683,6 +1890,8 @@
           return;
         await issueOtp(c, id);
       } catch (err) {
+        b.disabled = false;
+        b.textContent = "ส่ง OTP อีกครั้ง";
         toast(err.message);
       }
       return;
@@ -1995,11 +2204,102 @@
       throw Error("อีเมล เบอร์โทรศัพท์ หรือรหัสประจำตัวนี้มีผู้ใช้แล้ว");
   }
   document.addEventListener("submit", async (e) => {
+    const form = e.target;
+    if (!["firebase-resend-form", "firebase-reset-form"].includes(form.id))
+      return;
+    e.preventDefault();
+    const button = form.querySelector('[type="submit"]');
+    if (button.disabled) return;
+    const label = button.textContent;
+    const error = form.querySelector(".error");
+    error.textContent = "";
+    button.disabled = true;
+    button.textContent = "กำลังส่งลิงก์…";
+    const data = Object.fromEntries(new FormData(form));
+    try {
+      const result = await apiRequest(
+        "/api/firebase/" +
+          (form.id === "firebase-reset-form" ? "password-reset" : "resend"),
+        { method: "POST", body: JSON.stringify(data) },
+      );
+      if (form.id === "firebase-reset-form") {
+        openModal(
+          "ตรวจกล่องอีเมล",
+          `<p role="status">${esc(result.message)}</p><button class="btn primary" data-action="registration-login">กลับไปเข้าสู่ระบบ</button>`,
+        );
+      } else firebaseLinkModal(data.email, result.verified === true);
+    } catch (err) {
+      error.textContent = err.message;
+    } finally {
+      button.disabled = false;
+      button.textContent = label;
+    }
+  });
+  document.addEventListener("submit", async (e) => {
+    const f = e.target;
+    if (
+      !["email-register-form", "email-otp-form", "email-edit-form"].includes(
+        f.id,
+      )
+    )
+      return;
+    e.preventDefault();
+    if (emailBusy) return;
+    f.querySelectorAll("[data-error],.error").forEach(
+      (el) => (el.textContent = ""),
+    );
+    f.querySelectorAll("[aria-invalid]").forEach((el) =>
+      el.removeAttribute("aria-invalid"),
+    );
+    const d = Object.fromEntries(new FormData(f));
+    if (f.id === "email-otp-form")
+      return emailAction("verify", { code: String(d.otp || "").trim() });
+    if (f.id === "email-edit-form")
+      return emailAction("email", { email: d.email });
+    emailBusy = true;
+    const button = f.querySelector('[type="submit"]');
+    button.disabled = true;
+    button.textContent =
+      registrationProvider === "password"
+        ? "กำลังสมัครสมาชิก…"
+        : registrationProvider === "firebase"
+          ? "กำลังส่งลิงก์…"
+          : "กำลังส่งรหัส…";
+    try {
+      const result = await apiRequest("/api/registration/request", {
+        method: "POST",
+        body: JSON.stringify(d),
+      });
+      if (registrationProvider === "password") {
+        f.querySelector('[name="password"]').value = "";
+        openModal(
+          "สมัครสมาชิกสำเร็จ",
+          `<p>เข้าสู่ระบบด้วยอีเมลและรหัสผ่านที่ตั้งไว้ได้เลย</p><button class="btn primary" data-action="registration-login" data-email="${esc(result.email)}">ไปเข้าสู่ระบบ</button>`,
+        );
+        return;
+      }
+      if (registrationProvider === "firebase") {
+        f.querySelector('[name="password"]').value = "";
+        firebaseLinkModal(result.email, result.verified === true);
+        return;
+      }
+      emailRegistration = result;
+      saveEmailRegistration();
+      emailBusy = false;
+      emailOtpModal();
+    } catch (error) {
+      registrationFieldsError(f, error);
+    } finally {
+      emailBusy = false;
+      button.disabled = !registrationAvailable;
+      button.textContent = "สมัครสมาชิก";
+    }
+  });
+  document.addEventListener("submit", async (e) => {
     const f = e.target;
     if (
       ![
         "login-form",
-        "register-form",
         "support-form",
         "workshop-form",
         "forgot-form",
@@ -2093,6 +2393,7 @@
       }
       if (f.id === "forgot-form") {
         if (!ready) throw Error("กำลังเตรียมระบบ กรุณารอสักครู่");
+        if (registrationProvider === "password") d.channel = "email";
         if (!["email", "phone"].includes(d.channel))
           throw Error("กรุณาเลือกช่องทางรับ OTP");
         const contact =
@@ -2105,7 +2406,10 @@
             : !/^0\d{8,9}$/.test(contact)
         )
           throw Error("กรุณากรอกช่องทางติดต่อให้ถูกต้อง");
-        if (!(await askConfirm("ต้องการขอ OTP ผ่านช่องทางนี้จริงใช่ไหม?")))
+        if (
+          registrationProvider !== "password" &&
+          !(await askConfirm("ต้องการขอ OTP ผ่านช่องทางนี้จริงใช่ไหม?"))
+        )
           return;
         await issueOtp({
           purpose: "reset",
@@ -2122,6 +2426,7 @@
         }
         if (!/^\d{6}$/.test(d.otp)) throw Error("กรุณากรอก OTP 6 หลัก");
         if (
+          registrationProvider !== "password" &&
           !(await askConfirm("ต้องการยืนยัน OTP นี้และดำเนินการต่อจริงใช่ไหม?"))
         )
           return;
@@ -2137,11 +2442,9 @@
           body: JSON.stringify({ challengeId: c.challengeId, code: d.otp }),
         });
         otpChallenges.delete(f.dataset.id);
+        clearInterval(emailTimer);
         currentChallenge = null;
-        if (c.purpose === "register") {
-          closeModal();
-          toast("ยืนยัน OTP และสมัครสมาชิกสำเร็จ · รอเจ้าหน้าที่อนุมัติ");
-        } else {
+        {
           const grant = verified.grant;
           resetGrants.set(grant, {
             portal: c.portal,
@@ -2164,7 +2467,10 @@
         const password = d["reset-password"],
           problem = passwordError(password, d["reset-confirm"]);
         if (problem) throw Error(problem);
-        if (!(await askConfirm("ต้องการบันทึกรหัสผ่านใหม่นี้จริงใช่ไหม?")))
+        if (
+          registrationProvider !== "password" &&
+          !(await askConfirm("ต้องการบันทึกรหัสผ่านใหม่นี้จริงใช่ไหม?"))
+        )
           return;
         if (
           !f.isConnected ||
@@ -2183,6 +2489,13 @@
         resetGrants.delete(f.dataset.grant);
         clearRecovery();
         closeModal();
+        if (registrationProvider === "password") {
+          apiSaveEpoch++;
+          apiCsrf = null;
+          state.userId = null;
+          state.portal = "auto";
+          render();
+        }
         toast("ตั้งรหัสผ่านใหม่สำเร็จ กรุณาเข้าสู่ระบบด้วยรหัสผ่านใหม่");
       }
       if (f.id === "login-form") {
@@ -2192,7 +2505,6 @@
           body: JSON.stringify({
             identity: d.identity,
             password: d.password,
-            portal: state.portal,
           }),
         });
         if (portalAtSubmit !== state.portal || !f.isConnected) return;
@@ -2209,37 +2521,6 @@
         state.view = "open";
         render();
         toast("เข้าสู่ระบบสำเร็จ");
-      }
-      if (f.id === "register-form") {
-        if (!ready) throw Error("ระบบกำลังเตรียมข้อมูล กรุณารอสักครู่");
-        if (state.portal !== "user" || user())
-          throw Error("กรุณาเข้าสู่หน้าสมัครสมาชิกผู้ใช้");
-        const draft = {
-          name: d.name,
-          type: d.type,
-          code: d.code,
-          email: normalize(d.email || ""),
-          phone: d.phone || "",
-          faculty: d.faculty,
-          major: d.major,
-        };
-        validateDraft(draft);
-        const problem = passwordError(d["new-password"], d["confirm-password"]);
-        if (problem) throw Error(problem);
-        if (!["email", "phone"].includes(d.channel) || !draft[d.channel])
-          throw Error("กรุณากรอกช่องทางที่เลือกสำหรับรับ OTP");
-        if (
-          !(await askConfirm("ต้องการยืนยันข้อมูลสมัครและขอ OTP จริงใช่ไหม?"))
-        )
-          return;
-        await issueOtp({
-          purpose: "register",
-          portal: "user",
-          channel: d.channel,
-          contact: draft[d.channel],
-          draft,
-          pendingPassword: d["new-password"],
-        });
       }
       if (f.id === "support-form") {
         if (!member()) throw Error("เฉพาะผู้ใช้งานที่เข้าสู่ระบบเท่านั้น");
@@ -2354,7 +2635,10 @@
         commit("บันทึกแล้ว · เวิร์กช็อปและชั่วโมงอัปเดตในฝั่งผู้ใช้งานทันที");
       }
     } catch (error) {
-      if (err?.isConnected) err.textContent = error.message;
+      if (f.id === "login-form" && error.code === "FIREBASE_EMAIL_UNVERIFIED") {
+        f.querySelector('[name="password"]').value = "";
+        firebaseLinkModal(d.identity);
+      } else if (err?.isConnected) err.textContent = error.message;
       else toast(error.message);
     } finally {
       if (submit?.isConnected) submit.disabled = false;
@@ -2364,6 +2648,10 @@
     try {
       const session = await apiRequest("/api/session");
       otpAvailable = session.otpAvailable === true;
+      registrationAvailable = session.registrationAvailable === true;
+      registrationProvider = session.registrationProvider || "password";
+      passwordResetAvailable = session.passwordResetAvailable === true;
+      if (registrationProvider === "firebase") otpAvailable = false;
       updateSync("เชื่อมต่อแล้ว");
       if (session.user) {
         apiCsrf = session.csrf;
@@ -2380,6 +2668,7 @@
       }
       ready = true;
       render();
+      await restoreEmailRegistration();
     } catch (error) {
       ready = true;
       render();
