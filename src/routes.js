@@ -19,6 +19,7 @@ module.exports = function createRoutes({
   passwordRecord,
   verifyPassword,
   validNewPassword,
+  localDateInput,
   SESSION_TTL_MS,
   workshopRows,
   viewFromSnapshot,
@@ -73,6 +74,62 @@ module.exports = function createRoutes({
           registrationProvider === "password"
             ? Boolean(passwordResetAvailable)
             : !(process.env.VERCEL || process.env.NODE_ENV === "production"),
+      });
+    }
+    if (req.method === "POST" && url.pathname === "/api/account") {
+      const session = await requireSession(req, res);
+      if (!session) return;
+      const data = await bodyJson(req);
+      if (
+        !data ||
+        Object.keys(data).some((key) => !["name", "phone"].includes(key)) ||
+        typeof data.name !== "string" ||
+        typeof data.phone !== "string"
+      )
+        return json(res, 400, { error: "แก้ไขได้เฉพาะชื่อและเบอร์โทรศัพท์" });
+      const name = data.name.trim();
+      const phone = data.phone.trim();
+      if (!name || name.length > 120)
+        return json(res, 400, { error: "กรุณากรอกชื่อไม่เกิน 120 ตัวอักษร" });
+      if (phone && !/^0\d{8,9}$/.test(phone))
+        return json(res, 400, { error: "กรุณากรอกเบอร์โทรศัพท์ให้ถูกต้อง" });
+      await db.exec("BEGIN IMMEDIATE");
+      let account, snapshot;
+      try {
+        if (
+          await db
+            .prepare("SELECT id FROM users WHERE phone=? AND id<>?")
+            .get(phone, session.user.id)
+        ) {
+          await db.exec("ROLLBACK");
+          return json(res, 409, {
+            error: "เบอร์โทรศัพท์นี้ถูกใช้กับบัญชีอื่นแล้ว",
+          });
+        }
+        await db
+          .prepare("UPDATE users SET name=?,phone=? WHERE id=?")
+          .run(name, phone, session.user.id);
+        account = publicUser(
+          await db
+            .prepare("SELECT * FROM users WHERE id=?")
+            .get(session.user.id),
+        );
+        snapshot = await refreshSnapshot();
+        await db.exec("COMMIT");
+      } catch (error) {
+        await db.exec("ROLLBACK");
+        if (
+          error.code === "23505" ||
+          /UNIQUE constraint failed/.test(error.message)
+        )
+          return json(res, 409, {
+            error: "เบอร์โทรศัพท์นี้ถูกใช้กับบัญชีอื่นแล้ว",
+          });
+        throw error;
+      }
+      return json(res, 200, {
+        user: account,
+        store: viewFromSnapshot(snapshot, account),
       });
     }
     if (req.method === "POST" && url.pathname === "/api/otp/request")
@@ -417,6 +474,168 @@ module.exports = function createRoutes({
       if (!session) return;
       return json(res, 200, { workshops: await workshopRows() });
     }
+    if (req.method === "POST" && url.pathname === "/api/workshops/delete")
+      return bodyJson(req).then(async (data) => {
+        const session = await requireSession(req, res, "staff");
+        if (!session) return;
+        const workshopId = String(data.workshopId || "");
+        await db.exec("BEGIN IMMEDIATE");
+        try {
+          const row = await db
+            .prepare("SELECT revision FROM app_state WHERE id=1")
+            .get();
+          if (data.revision !== row.revision)
+            throw Object.assign(
+              new Error(
+                "ข้อมูลเปลี่ยนแล้ว กรุณาตรวจสอบข้อมูลล่าสุดก่อนลบอีกครั้ง",
+              ),
+              { status: 409 },
+            );
+          const workshop = await db
+            .prepare("SELECT * FROM workshops WHERE id=?")
+            .get(workshopId);
+          if (!workshop)
+            throw Object.assign(new Error("ไม่พบเวิร์กช็อป"), { status: 404 });
+          const registrationCount = (
+            await db
+              .prepare(
+                "SELECT count(*) n FROM registrations WHERE workshop_id=? AND status<>'CANCELLED'",
+              )
+              .get(workshopId)
+          ).n;
+          // Delete children explicitly for existing SQLite and PostgreSQL schemas.
+          await db
+            .prepare(
+              "DELETE FROM ratings WHERE registration_id IN (SELECT id FROM registrations WHERE workshop_id=?)",
+            )
+            .run(workshopId);
+          await db
+            .prepare("DELETE FROM registrations WHERE workshop_id=?")
+            .run(workshopId);
+          await db.prepare("DELETE FROM workshops WHERE id=?").run(workshopId);
+          const snapshot = await refreshSnapshot();
+          snapshot.auditLog.unshift({
+            id: uid(),
+            actorId: session.user.id,
+            actorName: session.user.name,
+            action: "delete",
+            entity: "workshops",
+            entityId: workshopId,
+            createdAt: now(),
+            workshop: {
+              id: workshop.id,
+              title: workshop.title,
+              start: localDateInput(workshop.start_at),
+              end: localDateInput(workshop.end_at),
+              place: workshop.place,
+              capacity: workshop.capacity,
+              hours: workshop.hours,
+              registrationCount,
+            },
+          });
+          await db
+            .prepare("UPDATE app_state SET data_json=? WHERE id=1")
+            .run(JSON.stringify(snapshot));
+          await db.exec("COMMIT");
+          return json(res, 200, {
+            store: snapshot,
+            revision: snapshot.revision,
+          });
+        } catch (error) {
+          await db.exec("ROLLBACK");
+          return json(res, error.status || 400, { error: error.message });
+        }
+      });
+    if (
+      req.method === "POST" &&
+      url.pathname === "/api/workshops/finalize-attendance"
+    ) {
+      const session = await requireSession(req, res, "staff");
+      if (!session) return;
+      const data = await bodyJson(req);
+      await db.exec("BEGIN IMMEDIATE");
+      try {
+        const row = await db
+          .prepare("SELECT revision,data_json FROM app_state WHERE id=1")
+          .get();
+        if (data.revision !== row.revision)
+          throw Object.assign(
+            new Error(
+              "ข้อมูลเปลี่ยนแล้ว กรุณาตรวจสอบผลล่าสุดก่อนยืนยันอีกครั้ง",
+            ),
+            { status: 409 },
+          );
+        const snapshot = readJson(row.data_json);
+        const workshop = snapshot.workshops.find(
+          (w) => w.id === data.workshopId,
+        );
+        const record = await db
+          .prepare("SELECT * FROM workshops WHERE id=?")
+          .get(String(data.workshopId || ""));
+        if (!workshop || !record)
+          throw Object.assign(new Error("ไม่พบเวิร์กช็อป"), { status: 404 });
+        if (
+          !Number.isFinite(Date.parse(record.end_at)) ||
+          Date.parse(record.end_at) > Date.now()
+        )
+          throw Object.assign(
+            new Error("ยืนยันผลได้เมื่อกิจกรรมสิ้นสุดแล้วเท่านั้น"),
+            { status: 409 },
+          );
+        const pending = (
+          await db
+            .prepare(
+              "SELECT count(*) n FROM registrations WHERE workshop_id=? AND status NOT IN ('ATTENDED','ABSENT','CANCELLED')",
+            )
+            .get(workshop.id)
+        ).n;
+        if (pending)
+          throw Object.assign(
+            new Error(
+              `ยังบันทึกผลไม่ครบ เหลือ ${pending} คน กรุณาระบุเข้าร่วมหรือไม่เข้าร่วมให้ครบก่อน`,
+            ),
+            {
+              status: 409,
+              code: "ATTENDANCE_INCOMPLETE",
+              pendingCount: pending,
+            },
+          );
+        if (!workshop.attendanceFinalizedAt) {
+          // Stored in the existing snapshot document; relational attendance remains the source of truth.
+          const next = await refreshSnapshot();
+          Object.assign(
+            next.workshops.find((w) => w.id === workshop.id),
+            {
+              attendanceFinalizedAt: now(),
+              attendanceFinalizedBy: session.user.id,
+            },
+          );
+          next.auditLog.unshift({
+            id: uid(),
+            actorId: session.user.id,
+            actorName: session.user.name,
+            action: "finalize-attendance",
+            entity: "workshops",
+            entityId: workshop.id,
+            createdAt: now(),
+          });
+          await db
+            .prepare("UPDATE app_state SET data_json=? WHERE id=1")
+            .run(JSON.stringify(next));
+          await db.exec("COMMIT");
+          return json(res, 200, { store: next, revision: next.revision });
+        }
+        await db.exec("COMMIT");
+        return json(res, 200, { store: snapshot, revision: snapshot.revision });
+      } catch (error) {
+        await db.exec("ROLLBACK");
+        return json(res, error.status || 400, {
+          error: error.message,
+          code: error.code,
+          pendingCount: error.pendingCount,
+        });
+      }
+    }
     if (req.method === "POST" && url.pathname === "/api/enroll")
       return bodyJson(req).then(async (data) => {
         const session = await requireSession(req, res, "user");
@@ -498,6 +717,23 @@ module.exports = function createRoutes({
         if (row.status !== status) {
           await db.exec("BEGIN IMMEDIATE");
           try {
+            const snapshot = readJson(
+              (
+                await db
+                  .prepare("SELECT data_json FROM app_state WHERE id=1")
+                  .get()
+              ).data_json,
+            );
+            if (
+              snapshot.workshops.find((w) => w.id === row.workshop_id)
+                ?.attendanceFinalizedAt
+            )
+              throw Object.assign(
+                new Error(
+                  "กิจกรรมนี้ยืนยันผลและเก็บเข้าประวัติแล้ว ไม่สามารถแก้ไขผลได้",
+                ),
+                { status: 409 },
+              );
             const current = await db
               .prepare("SELECT status FROM registrations WHERE id=?")
               .get(row.id);

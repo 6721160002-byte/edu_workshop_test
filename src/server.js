@@ -74,6 +74,9 @@ async function start() {
   process.on("SIGTERM", shutdown);
 }
 start().catch((error) => {
-  console.error(error);
+  if (error.code === "BOOTSTRAP_ADMIN_REQUIRED") {
+    console.error(error.message);
+    console.error("Diagnostic code:", error.code);
+  } else console.error(error);
   process.exitCode = 1;
 });

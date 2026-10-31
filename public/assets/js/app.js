@@ -51,7 +51,8 @@
         !apiCsrf ||
         apiSaveCount ||
         document.activeElement?.matches?.("input, textarea, select") ||
-        document.querySelector("#modal-root .dialog")
+        document.querySelector("#modal-root .dialog") ||
+        document.querySelector("#workshop-actions-menu")
       )
         return;
       try {
@@ -420,7 +421,8 @@
       view: "open",
       search: "",
       filter: "all",
-      period: "all",
+      dashboardMonths: 6,
+      dashboardAgendaOpen: false,
       slide: 0,
       notificationFilter: "general",
       notificationQuery: "",
@@ -429,10 +431,26 @@
       approvalStatus: "WAITING",
       participantQuery: "",
       participantStatus: "all",
+      managePage: 1,
+      manageView: "current",
+      managePageSize: 10,
+      manageSort: "priority",
+      archiveYear: null,
+      archiveMonth: "all",
+      archiveQuery: "",
+      archivePage: 1,
+      archiveWorkshop: null,
+      archiveParticipantQuery: "",
+      archiveParticipantStatus: "all",
+      archiveParticipantPage: 1,
     },
     ready = false,
+    initializing = false,
+    bootstrapError = false,
+    bootstrapStage = "session",
     modalReturn = null,
     toastTimer;
+  let workshopMenuTrigger = null;
   const user = () => store.users.find((u) => u.id === state.userId);
   const staff = () => state.portal === "staff" && user()?.role === "staff";
   const member = () =>
@@ -527,6 +545,12 @@
         })
         .finally(() => {
           apiSaveCount--;
+          if (
+            epoch === apiSaveEpoch &&
+            actor === state.userId &&
+            state.page === "participants"
+          )
+            render();
         });
     }
     return apiSaving;
@@ -574,6 +598,55 @@
 
   const input = (label, name, type = "text", extra = "") =>
     `<div class="field"><label for="${name}">${label}</label>${type === "password" ? '<div class="password-wrap">' : ""}<input id="${name}" name="${name}" type="${type}" ${extra} required>${type === "password" ? `<button type="button" class="password-toggle" data-action="toggle-password" data-id="${name}" aria-controls="${name}" aria-pressed="false" aria-label="แสดงรหัสผ่าน"><i class="fa-regular fa-eye"></i><span>แสดง</span></button></div>` : ""}</div>`;
+  function accountMenu(u) {
+    const item = (action, icon, label, extra = "") =>
+      `<button type="button" data-action="${action}" ${extra}><i class="fa-solid ${icon}" aria-hidden="true"></i><span>${label}</span></button>`;
+    return `<div class="account-menu">
+      <button type="button" class="account-menu-trigger" data-action="toggle-account-menu" aria-expanded="false" aria-controls="account-dropdown" aria-label="เมนูบัญชี ${esc(u.name)}"><span class="header-avatar" aria-hidden="true">${esc(Array.from(u.name)[0] || "ผ")}</span><i class="fa-solid fa-chevron-down" aria-hidden="true"></i></button>
+      <nav id="account-dropdown" class="account-dropdown" aria-label="บัญชีผู้ใช้งาน" hidden>
+        <div class="account-dropdown-heading"><span class="profile-avatar" aria-hidden="true">${esc(Array.from(u.name)[0] || "ผ")}</span><div><strong>${esc(u.name)}</strong><span>${esc(u.email)}</span><small>${u.role === "staff" ? "เจ้าหน้าที่ดูแลระบบ" : "สมาชิก BSRU Workshop"}</small></div></div>
+        <div class="account-menu-group">${item("account-profile", "fa-id-card", "ข้อมูลบัญชีของฉัน")}${item("account-settings", "fa-sliders", "ตั้งค่าบัญชี")}${item("account-password", "fa-lock", "เปลี่ยนรหัสผ่าน")}</div>
+        <div class="account-menu-group">${item("page", u.role === "staff" ? "fa-layer-group" : "fa-bookmark", u.role === "staff" ? "จัดการเวิร์กช็อป" : "กิจกรรมของฉัน", `data-id="${u.role === "staff" ? "manage" : "mine"}"`)}${item(u.role === "staff" ? "page" : "support", "fa-circle-question", "ความช่วยเหลือ", u.role === "staff" ? 'data-id="complaints"' : "")}</div>
+        <div class="account-menu-group">${item("switch", "fa-repeat", "เปลี่ยนบัญชี")}${item("logout", "fa-arrow-right-from-bracket", "ออกจากระบบ", 'class="account-menu-logout"')}</div>
+      </nav></div>`;
+  }
+  function closeAccountMenu(returnFocus = false) {
+    const trigger = $('[data-action="toggle-account-menu"]');
+    const dropdown = $("#account-dropdown");
+    if (!dropdown || dropdown.hidden) return;
+    dropdown.hidden = true;
+    trigger?.setAttribute("aria-expanded", "false");
+    if (returnFocus) trigger?.focus();
+  }
+  function accountDetails(u) {
+    return `<dl class="account-details">${[
+      ["อีเมล", u.email],
+      ["รหัสประจำตัว", u.code],
+      ["ประเภทผู้ใช้งาน", u.type],
+      [
+        "สิทธิ์การใช้งาน",
+        u.role === "staff" ? "เจ้าหน้าที่ดูแลระบบ" : "สมาชิก",
+      ],
+      ["คณะ / หน่วยงาน", u.faculty],
+      ["สาขา / งาน", u.major],
+      ["สถานะบัญชี", labels[u.status] || u.status],
+    ]
+      .map(
+        ([label, value]) =>
+          `<div><dt>${label}</dt><dd>${esc(value || "ยังไม่ได้ระบุ")}</dd></div>`,
+      )
+      .join("")}</dl>`;
+  }
+  function accountModal(settings = false) {
+    const u = user();
+    if (!u) return;
+    openModal(
+      settings ? "ตั้งค่าบัญชี" : "ข้อมูลบัญชีของฉัน",
+      settings
+        ? `<p class="muted">อัปเดตชื่อและเบอร์โทรศัพท์สำหรับติดต่อคุณ</p><form id="account-settings-form" class="space">${input("ชื่อ-นามสกุล", "account-name", "text", `autocomplete="name" maxlength="120" value="${esc(u.name)}"`)}<div class="field"><label for="account-phone">เบอร์โทรศัพท์ <span class="sub">(ไม่บังคับ)</span></label><input id="account-phone" name="account-phone" type="tel" autocomplete="tel" inputmode="tel" maxlength="10" pattern="0[0-9]{8,9}" value="${esc(u.phone)}"></div><div class="error" role="alert"></div><div class="row"><button class="btn primary" type="submit">บันทึกการเปลี่ยนแปลง</button><button class="btn" type="button" data-action="close">ยกเลิก</button></div></form><div class="account-security"><h3><i class="fa-solid fa-shield-halved" aria-hidden="true"></i> ความปลอดภัยบัญชี</h3><p class="muted">${otpAvailable || passwordResetAvailable ? "เปลี่ยนรหัสผ่านโดยยืนยัน OTP ทางอีเมลที่ผูกกับบัญชี" : "การเปลี่ยนรหัสผ่านทางอีเมลยังไม่เปิดให้บริการ กรุณาติดต่อผู้ดูแลระบบ"}</p><button type="button" class="btn small" data-action="account-password">เปลี่ยนรหัสผ่าน</button></div><details class="account-readonly"><summary>ข้อมูลประจำบัญชี</summary>${accountDetails(u)}<p class="sub">หากต้องการแก้ไขอีเมลหรือข้อมูลประจำตัว กรุณาติดต่อผู้ดูแลระบบ</p></details>`
+        : `<div class="account-profile-heading"><span class="profile-avatar" aria-hidden="true">${esc(Array.from(u.name)[0] || "ผ")}</span><div><h3>${esc(u.name)}</h3><p class="muted">${esc(u.phone || "ยังไม่ได้ระบุเบอร์โทรศัพท์")}</p></div></div>${accountDetails(u)}<button type="button" class="btn primary" data-action="account-settings">แก้ไขข้อมูลบัญชี</button>`,
+    );
+  }
   function shell(content) {
     const u = user(),
       a = staff();
@@ -584,6 +657,7 @@
       mine: "fa-bookmark",
       approvals: "fa-user-check",
       participants: "fa-users",
+      archive: "fa-clock-rotate-left",
       complaints: "fa-comments",
       "my-complaints": "fa-comment-dots",
       reports: "fa-chart-simple",
@@ -596,6 +670,7 @@
             ["manage", "จัดการเวิร์กช็อป"],
             ["approvals", "อนุมัติผู้ใช้งาน"],
             ["participants", "ผู้เข้าร่วมอบรม"],
+            ["archive", "เวิร์กช็อปย้อนหลัง"],
             ["complaints", "แจ้งปัญหาและความช่วยเหลือ"],
           ]
         : [
@@ -618,7 +693,7 @@
         ${u ? `<div class="workspace-label">พื้นที่ทำงาน <span>/</span> <b>${esc(active)}</b></div>` : '<span class="header-motto"><span class="status-dot"></span> เรียนรู้วันนี้ เติบโตได้ทุกวัน</span>'}
         <div class="header-actions">${u ? `<span class="role-pill ${a || state.portal === "staff" ? "staff-role" : ""}"><i class="fa-solid ${state.portal === "staff" ? "fa-shield-halved" : "fa-graduation-cap"}" aria-hidden="true"></i>${state.portal === "staff" ? "เจ้าหน้าที่" : "ผู้เรียน"}</span>` : ""}
         ${member() ? `<button class="btn icon-button" data-action="page" data-id="notifications" aria-label="การแจ้งเตือน ${unread} รายการที่ยังไม่อ่าน"><i class="fa-regular fa-bell" aria-hidden="true"></i>${unread ? '<span class="notification-dot"></span>' : ""}</button>` : ""}
-        ${u ? `<span class="header-avatar" aria-label="${esc(u.name)}">${esc(Array.from(u.name)[0])}</span><button class="btn icon-button mobile-action" data-action="logout" aria-label="ออกจากระบบ"><i class="fa-solid fa-arrow-right-from-bracket" aria-hidden="true"></i></button>` : ""}</div>
+        ${u ? accountMenu(u) : ""}</div>
       </div></header>
       ${
         u
@@ -746,123 +821,158 @@
     );
   }
   function staffDashboard() {
-    const registrations = store.registrations,
-      openWorkshops = store.workshops.filter(
-        (w) => !w.closed && (phase(w) === "upcoming" || phase(w) === "ongoing"),
-      ),
-      waitingUsers = store.users.filter((x) => x.status === "WAITING"),
-      openComplaints = store.complaints.filter((x) => x.status === "OPEN"),
-      statusItems = [
-        ["PENDING", "รอเข้าร่วม", "#e4a52b"],
-        ["ATTENDED", "เข้าร่วมแล้ว", "#23b486"],
-        ["ABSENT", "ไม่เข้าร่วม", "#e66b78"],
-        ["CANCELLED", "ยกเลิก", "#9895aa"],
-      ],
-      counts = statusItems.map(([key, label, color]) => ({
-        key,
-        label,
-        color,
-        count: registrations.filter((r) => r.status === key).length,
-      })),
-      total = registrations.length,
-      segments = counts.reduce(
-        (parts, item) => {
-          const start = parts.end;
-          const end = start + (total ? (item.count / total) * 100 : 0);
-          parts.items.push(`${item.color} ${start}% ${end}%`);
-          parts.end = end;
-          return parts;
-        },
-        { items: [], end: 0 },
-      ),
-      upcoming = store.workshops
-        .filter((w) => phase(w) === "upcoming" || phase(w) === "ongoing")
-        .sort((a, b) => new Date(a.start) - new Date(b.start))
-        .slice(0, 6),
-      trendMode =
-        state.period === "day"
-          ? "day"
-          : state.period === "week"
-            ? "week"
-            : "month",
-      trend = [],
-      now = new Date();
-
-    if (trendMode === "day") {
-      for (let i = 6; i >= 0; i--) {
-        const d = new Date(now);
-        d.setHours(0, 0, 0, 0);
-        d.setDate(d.getDate() - i);
-        const next = new Date(d);
-        next.setDate(next.getDate() + 1);
-        trend.push({
-          label: d.toLocaleDateString("th-TH", { weekday: "short" }),
-          value: registrations.filter((r) => {
-            const t = new Date(r.createdAt);
-            return t >= d && t < next;
-          }).length,
-        });
-      }
-    } else if (trendMode === "week") {
-      for (let i = 7; i >= 0; i--) {
-        const d = new Date(now);
-        d.setHours(0, 0, 0, 0);
-        d.setDate(d.getDate() - ((d.getDay() + 6) % 7) - i * 7);
-        const next = new Date(d);
-        next.setDate(next.getDate() + 7);
-        trend.push({
-          label: d.toLocaleDateString("th-TH", {
-            day: "numeric",
-            month: "short",
-          }),
-          value: registrations.filter((r) => {
-            const t = new Date(r.createdAt);
-            return t >= d && t < next;
-          }).length,
-        });
-      }
-    } else {
-      for (let i = 5; i >= 0; i--) {
-        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-        const next = new Date(d.getFullYear(), d.getMonth() + 1, 1);
-        trend.push({
-          label: d.toLocaleDateString("th-TH", { month: "short" }),
-          value: registrations.filter((r) => {
-            const t = new Date(r.createdAt);
-            return t >= d && t < next;
-          }).length,
-        });
-      }
+    const now = Date.now();
+    const campusToday = new Date(now + 7 * 3600000);
+    const year = campusToday.getUTCFullYear(),
+      month = campusToday.getUTCMonth();
+    const months = state.dashboardMonths;
+    const calendarStart = Date.UTC(year, month - months + 1, 1);
+    const from = calendarStart - 7 * 3600000;
+    const monthLabel = (value, full = false) =>
+      new Date(value).toLocaleDateString("th-TH", {
+        timeZone: "UTC",
+        month: full ? "long" : "short",
+        year: full ? "numeric" : "2-digit",
+      });
+    const periodLabel = `${monthLabel(calendarStart)} – ${monthLabel(Date.UTC(year, month, 1))}`;
+    // Both graphs use registrations created in the same campus-time window.
+    const registrations = store.registrations.filter((r) => {
+      const created = +archiveDate(r.createdAt);
+      return r.status !== "CANCELLED" && created >= from && created <= now;
+    });
+    const byMonth = new Map();
+    for (const r of registrations) {
+      const key = new Date(+archiveDate(r.createdAt) + 7 * 3600000)
+        .toISOString()
+        .slice(0, 7);
+      byMonth.set(key, (byMonth.get(key) || 0) + 1);
     }
-    const maxTrend = Math.max(1, ...trend.map((x) => x.value));
-    const statCard = (label, value, icon, tone, page, caption) =>
-      `<button class="staff-stat-card" data-action="page" data-id="${page}" style="--staff-stat:${tone}"><span class="staff-stat-icon"><i class="fa-solid ${icon}" aria-hidden="true"></i></span><span class="staff-stat-copy"><small>${label}</small><strong>${number(value)}</strong><em>${caption}</em></span><span class="staff-stat-arrow" aria-hidden="true">↗</span></button>`;
-    const table = upcoming.length
-      ? upcoming
-          .map(
-            (w) =>
-              `<tr><td><strong>${esc(w.title)}</strong><span>${esc(w.place || "ไม่ระบุสถานที่")}</span></td><td>${esc(new Date(w.start).toLocaleDateString("th-TH", { day: "numeric", month: "short", year: "numeric" }))}</td><td><strong>${number(occupancy(w.id))}</strong> / ${number(w.capacity)} คน</td><td>${badge(phase(w))}</td><td><button class="btn small" data-action="page" data-id="manage">จัดการ</button></td></tr>`,
+    const trend = Array.from({ length: months }, (_, i) => {
+      const date = new Date(Date.UTC(year, month - months + i + 1, 1));
+      const key = date.toISOString().slice(0, 7);
+      return {
+        key,
+        label: date.toLocaleDateString("th-TH", {
+          timeZone: "UTC",
+          month: "short",
+        }),
+        year: date.toLocaleDateString("th-TH", {
+          timeZone: "UTC",
+          year: "2-digit",
+        }),
+        fullLabel: monthLabel(+date, true),
+        value: byMonth.get(key) || 0,
+      };
+    });
+    const maxValue = Math.max(1, ...trend.map((item) => item.value));
+    const ceiling =
+      maxValue <= 5
+        ? 5
+        : Math.ceil(maxValue / Math.pow(10, Math.floor(Math.log10(maxValue)))) *
+          Math.pow(10, Math.floor(Math.log10(maxValue)));
+    const attended = registrations.filter(
+      (r) => r.status === "ATTENDED",
+    ).length;
+    const absent = registrations.filter((r) => r.status === "ABSENT").length;
+    const pending = registrations.filter((r) => r.status === "PENDING").length;
+    const recorded = attended + absent;
+    const percent = recorded ? (attended / recorded) * 100 : null;
+    const percentLabel =
+      percent === null
+        ? "—"
+        : percent.toLocaleString("th-TH", { maximumFractionDigits: 1 }) + "%";
+    const tasks = attendanceTasks();
+    const waitingUsers = store.users.filter(
+      (u) => u.role === "user" && u.status === "WAITING",
+    ).length;
+    const openComplaints = store.complaints.filter(
+      (c) => c.status === "OPEN",
+    ).length;
+    const taskButton = (action, id, icon, label, count, unit) =>
+      `<button type="button" class="staff-task" data-action="${action}" data-id="${esc(id)}"><i class="fa-solid ${icon}" aria-hidden="true"></i><span>${label}</span><b>${number(count)}</b><span>${unit}</span><i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>`;
+    const taskItems = [
+      tasks.length
+        ? taskButton(
+            "participants-for",
+            tasks[0].id,
+            "fa-clipboard-check",
+            "บันทึก / ยืนยันผล",
+            tasks.length,
+            "กิจกรรม",
           )
-          .join("")
-      : `<tr><td colspan="5"><div class="staff-empty"><i class="fa-regular fa-calendar-xmark"></i><strong>ยังไม่มีกิจกรรมที่กำลังจะมาถึง</strong><span>เมื่อมีเวิร์กช็อปใหม่ รายการจะแสดงที่นี่</span></div></td></tr>`;
-    const trendBars = trend
+        : "",
+      waitingUsers
+        ? taskButton(
+            "page",
+            "approvals",
+            "fa-user-check",
+            "อนุมัติผู้ใช้งาน",
+            waitingUsers,
+            "บัญชี",
+          )
+        : "",
+      openComplaints
+        ? taskButton(
+            "page",
+            "complaints",
+            "fa-comments",
+            "ตอบคำร้อง",
+            openComplaints,
+            "เรื่อง",
+          )
+        : "",
+    ].join("");
+    const taskSection = taskItems
+      ? `<section class="staff-tasks" aria-label="งานค้างปัจจุบัน"><h2>งานค้างปัจจุบัน</h2><div class="staff-task-list">${taskItems}</div></section>`
+      : '<div class="staff-all-clear"><i class="fa-solid fa-circle-check" aria-hidden="true"></i> ไม่มีงานค้าง</div>';
+    const ongoing = (w) =>
+      +archiveDate(w.start) <= now && +archiveDate(w.end) > now;
+    const current = store.workshops
+      .filter(
+        (w) =>
+          !w.cancelled &&
+          !w.attendanceFinalizedAt &&
+          +archiveDate(w.end) > now &&
+          (ongoing(w) || +archiveDate(w.start) > now),
+      )
+      .sort(
+        (a, b) =>
+          Number(ongoing(b)) - Number(ongoing(a)) ||
+          archiveDate(a.start) - archiveDate(b.start) ||
+          a.id.localeCompare(b.id),
+      );
+    const table = current
+      .slice(0, 5)
+      .map((w) => {
+        const status = ongoing(w)
+          ? "ongoing"
+          : w.closed
+            ? "closed"
+            : "upcoming";
+        const label = {
+          ongoing: "กำลังดำเนินการ",
+          closed: "ปิดรับสมัคร",
+          upcoming: "กำลังจะมาถึง",
+        }[status];
+        return `<tr data-workshop-id="${esc(w.id)}"><td data-label="กิจกรรม"><strong>${esc(w.title)}</strong></td><td data-label="วันเวลา"><time datetime="${esc(w.start)}">${esc(archiveDateLabel(w.start))}</time></td><td data-label="ผู้ลงทะเบียน / ที่นั่ง">${number(occupancy(w.id))} / ${number(w.capacity)}</td><td data-label="สถานะ"><span class="staff-phase is-${status}">${label}</span></td><td><button type="button" class="btn small" data-action="participants-for" data-id="${esc(w.id)}" aria-label="ดูผู้เข้าร่วม ${esc(w.title)}">ดูผู้เข้าร่วม</button></td></tr>`;
+      })
+      .join("");
+    const bars = trend
       .map(
         (item) =>
-          `<div class="staff-trend-item" title="${esc(item.label)}: ${number(item.value)} คน"><strong>${number(item.value)}</strong><div class="staff-trend-bar"><i style="height:${(item.value / maxTrend) * 100}%"></i></div><small>${esc(item.label)}</small></div>`,
+          `<div class="staff-trend-item ${item.value ? "" : "is-zero"}"><button type="button" class="staff-month-bar" data-action="dashboard-month-info" data-label="${esc(item.fullLabel)}" data-count="${item.value}" aria-label="${esc(item.fullLabel)}: ${number(item.value)} รายการ"><span class="staff-trend-bar"><span class="staff-bar-fill" style="height:${(item.value / ceiling) * 100}%"><span class="staff-bar-value">${number(item.value)}</span></span></span></button><span class="staff-month-label">${esc(item.label)}<small>${esc(item.year)}</small></span></div>`,
       )
       .join("");
-    return `<div class="staff-dashboard"><div class="staff-dashboard-head"><div>${title("STAFF OVERVIEW", "ภาพรวมการอบรม", "ติดตามกิจกรรม ผู้ลงทะเบียน และงานที่ต้องดำเนินการจากข้อมูลล่าสุด")}</div><div class="staff-dashboard-meta"><span class="live-dot"></span> สถานะการเชื่อมต่อ <span class="sync" data-sync-status role="status">${esc(syncMessage)}</span></div></div><div class="toolbar staff-period-toolbar"><span class="muted">ช่วงข้อมูลแนวโน้มการลงทะเบียน</span><div class="tabs">${[
-      ["day", "วัน"],
-      ["week", "สัปดาห์"],
-      ["month", "เดือน"],
-    ]
-      .map(
-        ([v, l]) =>
-          `<button data-action="period" data-id="${v}" class="${state.period === v ? "active" : ""}">${l}</button>`,
-      )
-      .join(
-        "",
-      )}</div></div><div class="staff-stat-grid">${statCard("เวิร์กช็อปที่เปิดรับ", openWorkshops.length, "fa-calendar-check", "#854c9e", "manage", "กิจกรรมที่ยังเปิดรับสมัคร")}${statCard("จำนวนผู้ลงทะเบียน", registrations.filter((r) => r.status !== "CANCELLED").length, "fa-users", "#d98b30", "participants", "รายการที่ยังไม่ยกเลิก")}${statCard("ผู้ใช้งานรออนุมัติ", waitingUsers.length, "fa-user-clock", "#e4a52b", "approvals", "บัญชีที่รอตรวจสอบ")}${statCard("คำร้องที่รอดำเนินการ", openComplaints.length, "fa-comments", "#c85d77", "complaints", "คำร้องสถานะเปิด")}</div><div class="staff-dashboard-grid"><section class="panel staff-table-panel"><div class="staff-panel-heading"><div><span class="eyebrow">UPCOMING WORKSHOPS</span><h2>กิจกรรมที่กำลังจะมาถึง</h2><p class="muted">แสดงกิจกรรมตามวันเริ่มต้นและจำนวนที่นั่งล่าสุด</p></div><button class="btn small" data-action="page" data-id="manage">ดูทั้งหมด <span aria-hidden="true">→</span></button></div><div class="staff-table-wrap"><table class="staff-table"><thead><tr><th>กิจกรรม</th><th>วันที่</th><th>ผู้ลงทะเบียน / ที่นั่ง</th><th>สถานะ</th><th></th></tr></thead><tbody>${table}</tbody></table></div></section><section class="panel staff-donut-panel"><div class="staff-panel-heading"><div><span class="eyebrow">REGISTRATION STATUS</span><h2>สถานะผู้ลงทะเบียน</h2><p class="muted">รวมทั้งหมด ${number(total)} รายการ</p></div></div><div class="staff-donut-wrap"><div class="staff-donut" style="background:${total ? `conic-gradient(${segments.items.join(",")})` : "#ebe8f0"}"><strong>${number(total)}<small>รายการ</small></strong></div><div class="staff-legend">${counts.map((item) => `<div><span><i style="background:${item.color}"></i>${item.label}</span><strong>${number(item.count)}<small>${total ? Math.round((item.count / total) * 100) : 0}%</small></strong></div>`).join("")}</div></div>${!total ? '<p class="staff-empty-note">ยังไม่มีข้อมูลการลงทะเบียนในระบบ</p>' : ""}</section></div><section class="panel staff-trend-panel"><div class="staff-panel-heading"><div><span class="eyebrow">REGISTRATION TREND</span><h2>แนวโน้มจำนวนผู้ลงทะเบียน</h2><p class="muted">หน่วย: คน · นับจากวันที่สร้างรายการลงทะเบียน</p></div><span class="staff-trend-current">${trendMode === "day" ? "รายวัน" : trendMode === "week" ? "รายสัปดาห์" : "รายเดือน"}</span></div><div class="staff-trend-chart">${trendBars}</div>${registrations.length ? "" : '<div class="staff-empty"><i class="fa-solid fa-chart-line"></i><strong>ยังไม่มีข้อมูลแนวโน้ม</strong><span>เมื่อมีการลงทะเบียน กราฟจะแสดงตามช่วงเวลาที่เลือก</span></div>'}</section></div>`;
+    const graph = registrations.length
+      ? `<div class="staff-trend-plot" data-months="${months}"><div class="staff-chart-axis" aria-hidden="true"><span>${number(ceiling)}</span><span>${number(ceiling / 2)}</span><span>0</span></div><div class="staff-trend-chart" style="--trend-count:${months}" role="group" aria-label="รายการลงทะเบียนรายเดือน">${bars}</div></div><p class="staff-chart-footnote">แตะหรือชี้แท่งกราฟเพื่อดูจำนวนรายการ</p>`
+      : '<div class="staff-empty"><i class="fa-solid fa-chart-column" aria-hidden="true"></i><strong>ยังไม่มีรายการลงทะเบียนในช่วงนี้</strong><span>ข้อมูลจะแสดงเมื่อมีการลงทะเบียน</span></div>';
+    const ring = `<div class="staff-donut" role="img" aria-label="${recorded ? `เข้าร่วมแล้ว ${number(attended)} จาก ${number(recorded)} รายการ คิดเป็น ${percentLabel}` : "ยังไม่มีรายการที่บันทึกผลแล้ว"}" style="background:${recorded ? `conic-gradient(var(--staff-attended) 0% ${percent}%, var(--staff-absent) ${percent}% 100%)` : "var(--staff-chart-track)"}"><div class="staff-donut-value"><strong>${percentLabel}</strong><span>${recorded ? "เข้าร่วมจริง" : "ยังไม่มีผล"}</span></div></div>`;
+    return `<div class="staff-dashboard"><div class="staff-dashboard-head"><div>${title("STAFF OVERVIEW", "ภาพรวมการอบรม", "ติดตามการลงทะเบียน ผลการเข้าร่วม และงานที่ต้องดำเนินการ")}</div><div class="staff-dashboard-meta"><span class="live-dot" aria-hidden="true"></span><span class="sync" data-sync-status role="status">${esc(syncMessage)}</span></div></div>
+      ${taskSection}
+      <section class="staff-report" aria-label="สรุปการลงทะเบียนและผลเข้าร่วม"><div class="staff-report-heading"><div><h2>สรุปการอบรม</h2><p>${esc(periodLabel)} · นับตามวันที่ลงทะเบียน · ไม่รวมรายการที่ยกเลิก</p></div><label class="staff-period-label" for="dashboard-period">ช่วงข้อมูลของทั้ง 2 กราฟ<select id="dashboard-period"><option value="6" ${months === 6 ? "selected" : ""}>6 เดือนล่าสุด</option><option value="12" ${months === 12 ? "selected" : ""}>12 เดือนล่าสุด</option></select></label></div>
+      <div class="staff-dashboard-grid"><section class="panel staff-trend-panel" aria-labelledby="staff-trend-heading"><div class="staff-panel-heading"><div><h3 id="staff-trend-heading">การลงทะเบียนรายเดือน</h3><p>รวม <strong class="staff-registration-total">${number(registrations.length)}</strong> รายการในช่วงที่เลือก</p></div><span class="staff-chart-unit">หน่วย: รายการ</span></div>${graph}</section>
+      <section class="panel staff-donut-panel" aria-labelledby="staff-outcome-heading"><div class="staff-panel-heading"><div><h3 id="staff-outcome-heading">ผลการเข้าร่วม</h3><p>เฉพาะรายการที่บันทึกผลแล้ว</p></div></div>${ring}${recorded ? `<dl class="staff-outcome-legend"><div><dt><i class="is-attended" aria-hidden="true"></i>เข้าร่วมแล้ว</dt><dd>${number(attended)} <small>รายการ</small></dd></div><div><dt><i class="is-absent" aria-hidden="true"></i>ไม่เข้าร่วม</dt><dd>${number(absent)} <small>รายการ</small></dd></div></dl><p class="staff-chart-footnote">คำนวณจาก ${number(recorded)} รายการที่มีผลแล้ว</p>` : '<p class="staff-outcome-empty">ยังคำนวณอัตราเข้าร่วมไม่ได้</p>'}${pending ? `<p class="staff-outcome-pending">ยังไม่มีผลการเข้าร่วม ${number(pending)} รายการ<br><span>ไม่นำมาคำนวณเปอร์เซ็นต์</span></p>` : ""}</section></div></section>
+      <details class="staff-activity-details" id="staff-upcoming-details" ${state.dashboardAgendaOpen ? "open" : ""}><summary><span><i class="fa-regular fa-calendar" aria-hidden="true"></i> กิจกรรมปัจจุบันและกิจกรรมถัดไป</span><span class="staff-activity-count">${number(current.length)} กิจกรรม</span><i class="fa-solid fa-chevron-down" aria-hidden="true"></i></summary><div class="staff-activity-content"><div class="staff-activity-toolbar"><span>ข้อมูลปัจจุบัน${current.length > 5 ? ` · แสดง 5 จาก ${number(current.length)} กิจกรรม` : ""}</span><button class="btn small" data-action="page" data-id="manage">จัดการเวิร์กช็อปทั้งหมด</button></div>${table ? `<div class="staff-table-wrap"><table class="staff-table"><thead><tr><th scope="col">กิจกรรม</th><th scope="col">วันเวลา</th><th scope="col">ผู้ลงทะเบียน / ที่นั่ง</th><th scope="col">สถานะ</th><th scope="col"><span class="staff-sr-only">เปิดรายชื่อ</span></th></tr></thead><tbody>${table}</tbody></table></div>` : '<p class="staff-empty-note">ยังไม่มีกิจกรรมปัจจุบันหรือกิจกรรมถัดไป</p>'}</div></details></div>`;
   }
 
   function card(w) {
@@ -894,42 +1004,285 @@
     link.click();
     URL.revokeObjectURL(url);
   }
-  function managementTable(list) {
-    return (
-      '<div class="panel tablewrap"><table><thead><tr><th>กิจกรรม</th><th>วันเริ่ม</th><th>ผู้สมัคร / ที่นั่ง</th><th>สถานะ</th><th>จัดการ</th></tr></thead><tbody>' +
-      list
-        .map(
-          (w) =>
-            '<tr><td><button class="activity-title" data-action="workshop-detail" data-id="' +
-            w.id +
-            '">' +
-            esc(w.title) +
-            "</button></td><td>" +
-            esc(fmt(w.start)) +
-            "</td><td>" +
-            occupancy(w.id) +
-            " / " +
-            w.capacity +
-            "</td><td>" +
-            phaseLabel(w) +
-            '</td><td><div class="staff-row-actions"><button class="btn small primary" data-action="participants-for" data-id="' +
-            w.id +
-            '">ผู้เข้าร่วม</button><button class="btn small" data-action="edit-workshop" data-id="' +
-            w.id +
-            '">แก้ไข</button>' +
-            (!w.closed && scheduledPhase(w) !== "finished"
-              ? '<button class="btn small danger" data-action="close-workshop" data-id="' +
-                w.id +
-                '">ปิดรับสมัคร</button>'
-              : "") +
-            "</div></td></tr>",
-        )
-        .join("") +
-      "</tbody></table></div>"
+  const managementStatuses = [
+    ["ongoing", "กำลังดำเนินการ"],
+    ["upcoming", "กำลังจะมาถึง"],
+    ["closed", "ปิดรับสมัคร"],
+    ["finished", "เสร็จสิ้นแล้ว"],
+  ];
+  const managementStatusLabel = (status) =>
+    status === "cancelled"
+      ? "ยกเลิกกิจกรรม"
+      : managementStatuses.find(([value]) => value === status)?.[1] ||
+        "ทุกสถานะ";
+  function deletedWorkshopRecords() {
+    if (!staff()) return [];
+    const calendar = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Bangkok",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    return (store.auditLog || [])
+      .filter(
+        (entry) => entry.action === "delete" && entry.entity === "workshops",
+      )
+      .map((entry) => ({
+        id: entry.id || `deleted-${entry.entityId}-${entry.createdAt}`,
+        workshopId: entry.entityId,
+        title:
+          entry.workshop?.title ||
+          `เวิร์กช็อปที่ลบแล้ว (รหัส ${entry.entityId})`,
+        place: entry.workshop?.place || "",
+        deletedAt: entry.createdAt || "",
+        deletedDate: Number.isFinite(Date.parse(entry.createdAt))
+          ? calendar.format(new Date(entry.createdAt))
+          : "",
+        deletedBy: entry.actorName || "ไม่ทราบผู้ดำเนินการ",
+        workshop: entry.workshop || null,
+      }));
+  }
+  function deletedWorkshopsTable(list) {
+    return `<div class="manage-table-wrap"><table class="manage-table manage-deleted-table"><caption class="sr-only">ประวัติกิจกรรมที่ลบไปแล้ว สำหรับแอดมิน</caption><thead><tr><th scope="col">เวิร์กช็อป</th><th scope="col">ลบเมื่อ</th><th scope="col">ลบโดย</th><th scope="col"><span class="sr-only">รายละเอียดประวัติ</span></th></tr></thead><tbody>${list.map((record) => `<tr class="manage-workshop-row manage-deleted-row" data-workshop-id="${esc(record.workshopId)}"><td><button class="manage-workshop-title" data-action="deleted-workshop-detail" data-id="${esc(record.id)}">${esc(record.title)}</button>${!record.workshop ? '<span class="manage-time">บันทึกเก่า · มีเฉพาะรหัสกิจกรรม</span>' : ""}</td><td>${record.deletedAt ? `<time datetime="${esc(record.deletedAt)}">${esc(fmt(record.deletedAt))}</time>` : "ไม่ทราบวันที่"}</td><td><span class="manage-deleted-actor">${esc(record.deletedBy)}</span></td><td><div class="manage-row-actions"><button class="btn small manage-participants" data-action="deleted-workshop-detail" data-id="${esc(record.id)}">ดูประวัติ</button></div></td></tr>`).join("")}</tbody></table></div>`;
+  }
+  function deletedWorkshopDetail(id) {
+    const record = deletedWorkshopRecords().find((entry) => entry.id === id);
+    if (!record) return toast("ไม่พบประวัติกิจกรรมนี้");
+    const w = record.workshop;
+    const fields = [
+      ["รหัสกิจกรรม", record.workshopId],
+      ["ลบเมื่อ", record.deletedAt ? fmt(record.deletedAt) : "ไม่ทราบวันที่"],
+      ["ลบโดย", record.deletedBy],
+      ...(w
+        ? [
+            ["วันจัดกิจกรรมเดิม", `${fmt(w.start)} – ${fmt(w.end)}`],
+            ["สถานที่เดิม", w.place],
+            [
+              "ผู้สมัครก่อนลบ",
+              `${w.registrationCount} / ${w.capacity} ที่นั่ง`,
+            ],
+            ["จำนวนชั่วโมงเดิม", `${w.hours} ชั่วโมง`],
+          ]
+        : []),
+    ];
+    openModal(
+      "ประวัติกิจกรรมที่ลบไปแล้ว",
+      `<p class="manage-deleted-title">${esc(record.title)}</p><dl class="account-details">${fields.map(([label, value]) => `<div><dt>${label}</dt><dd>${esc(value || "—")}</dd></div>`).join("")}</dl>${w ? '<p class="sub">เก็บไว้เป็นประวัติการลบสำหรับแอดมิน</p>' : '<div class="notice">บันทึกเก่านี้ไม่ได้เก็บชื่อและรายละเอียดกิจกรรมไว้ จึงแสดงได้เฉพาะรหัสและข้อมูลการลบที่มีอยู่</div>'}<button type="button" class="btn" data-action="close">ปิด</button>`,
     );
   }
+  function managementTable(list, grouped, showRowStatus) {
+    let lastStatus = null;
+    const rows = list
+      .map((w) => {
+        const status = phase(w);
+        const group =
+          grouped && status !== lastStatus
+            ? `<tr class="manage-group-row"><th colspan="4" scope="colgroup"><span class="manage-status manage-status-${status}">${managementStatusLabel(status)}</span></th></tr>`
+            : "";
+        lastStatus = status;
+        const starts = new Date(w.start);
+        const date = starts.toLocaleDateString("th-TH", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+        });
+        const time = starts.toLocaleTimeString("th-TH", {
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+        const enrolled = occupancy(w.id);
+        return `${group}<tr class="manage-workshop-row" data-workshop-id="${esc(w.id)}">
+        <td><button class="manage-workshop-title" data-action="workshop-detail" data-id="${esc(w.id)}">${esc(w.title)}</button>${+archiveDate(w.end) < Date.now() ? `<span class="manage-time">${w.attendanceFinalizedAt ? "ยืนยันผลแล้ว" : attendanceStats(w).pending ? `รอบันทึกผล ${number(attendanceStats(w).pending)} คน` : "บันทึกครบแล้ว · รอยืนยันผล"}</span>` : ""}${showRowStatus ? `<span class="manage-status manage-status-${status} manage-row-status">${managementStatusLabel(status)}</span>` : ""}</td>
+        <td><time datetime="${esc(w.start)}">${esc(date)}</time><span class="manage-time">${esc(time)} น.</span></td>
+        <td><span class="manage-seat-count" aria-label="ผู้สมัคร ${enrolled} จาก ${w.capacity} ที่นั่ง"><b>${number(enrolled)}</b><span> / ${number(w.capacity)}</span></span>${enrolled >= w.capacity ? '<small class="manage-full">เต็มแล้ว</small>' : ""}</td>
+        <td><div class="manage-row-actions"><button class="btn small manage-participants" data-action="participants-for" data-id="${esc(w.id)}" aria-label="ดูผู้เข้าร่วม ${esc(w.title)}">ผู้เข้าร่วม</button><button class="manage-more" data-action="workshop-menu" data-id="${esc(w.id)}" aria-label="จัดการเวิร์กช็อป ${esc(w.title)}" aria-haspopup="menu" aria-expanded="false" aria-controls="workshop-actions-menu"><span aria-hidden="true">⋯</span></button></div></td>
+      </tr>`;
+      })
+      .join("");
+    return `<div class="manage-table-wrap"><table class="manage-table"><caption class="sr-only">รายการเวิร์กช็อปตามตัวกรองที่เลือก</caption><thead><tr><th scope="col">เวิร์กช็อป</th><th scope="col">วันจัด</th><th scope="col">ผู้สมัคร / ที่นั่ง</th><th scope="col"><span class="sr-only">จัดการ</span></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
+  function managementPagination(total, pages) {
+    if (total <= 10 && state.managePageSize === 10) return "";
+    const current = state.managePage;
+    const first = (current - 1) * state.managePageSize + 1;
+    const last = Math.min(current * state.managePageSize, total);
+    const choices = [...new Set([1, pages, current - 1, current, current + 1])]
+      .filter((page) => page > 0 && page <= pages)
+      .sort((a, b) => a - b);
+    let previous = 0;
+    const links = choices
+      .map((page) => {
+        const gap =
+          previous && page - previous > 1
+            ? '<span class="manage-page-gap" aria-hidden="true">…</span>'
+            : "";
+        previous = page;
+        return `${gap}<button type="button" data-action="manage-page" data-id="${page}" aria-label="หน้า ${page}" ${page === current ? 'aria-current="page"' : ""}>${page}</button>`;
+      })
+      .join("");
+    return `<div class="manage-pagination"><span class="manage-range" role="status">แสดง ${number(first)}–${number(last)} จาก ${number(total)} รายการ</span><label class="manage-page-size">ต่อหน้า <select id="manage-page-size" aria-label="จำนวนเวิร์กช็อปต่อหน้า">${[10, 25, 50].map((size) => `<option value="${size}" ${size === state.managePageSize ? "selected" : ""}>${size}</option>`).join("")}</select></label><nav class="manage-page-links" aria-label="หน้ารายการเวิร์กช็อป"><button type="button" data-action="manage-page" data-id="${current - 1}" aria-label="หน้าก่อนหน้า" ${current === 1 ? "disabled" : ""}>‹</button>${links}<button type="button" data-action="manage-page" data-id="${current + 1}" aria-label="หน้าถัดไป" ${current === pages ? "disabled" : ""}>›</button></nav></div>`;
+  }
+  function managedWorkshops() {
+    const viewingDeleted = state.manageView === "deleted";
+    const query = state.search.trim().toLowerCase();
+    const history = deletedWorkshopRecords();
+    const deleted = history.filter(
+      (record) =>
+        (!query ||
+          `${record.title} ${record.place} ${record.deletedBy} ${record.workshopId}`
+            .toLowerCase()
+            .includes(query)) &&
+        (!state.dateFrom || record.deletedDate >= state.dateFrom) &&
+        (!state.dateTo || record.deletedDate <= state.dateTo),
+    );
+    const base = store.workshops.filter(
+      (w) =>
+        (!query || `${w.title} ${w.place}`.toLowerCase().includes(query)) &&
+        (!state.dateFrom || w.start.slice(0, 10) >= state.dateFrom) &&
+        (!state.dateTo || w.start.slice(0, 10) <= state.dateTo),
+    );
+    const filtered = viewingDeleted
+      ? deleted
+      : base.filter((w) => state.filter === "all" || phase(w) === state.filter);
+    const rank = Object.fromEntries(
+      managementStatuses.map(([value], index) => [value, index]),
+    );
+    filtered.sort((a, b) => {
+      if (viewingDeleted) {
+        const difference =
+          (Date.parse(a.deletedAt) || 0) - (Date.parse(b.deletedAt) || 0);
+        return (
+          (state.manageSort === "oldest" ? difference : -difference) ||
+          a.id.localeCompare(b.id)
+        );
+      }
+      const dateDifference = +new Date(a.start) - +new Date(b.start);
+      const tie =
+        a.title.localeCompare(b.title, "th") || a.id.localeCompare(b.id);
+      if (state.manageSort === "newest") return -dateDifference || tie;
+      if (state.manageSort === "oldest") return dateDifference || tie;
+      return (
+        (rank[phase(a)] ?? 4) - (rank[phase(b)] ?? 4) ||
+        (["ongoing", "upcoming"].includes(phase(a))
+          ? dateDifference
+          : -dateDifference) ||
+        tie
+      );
+    });
+    const pages = Math.max(
+      1,
+      Math.ceil(filtered.length / state.managePageSize),
+    );
+    state.managePage = Math.max(1, Math.min(state.managePage, pages));
+    const shown = filtered.slice(
+      (state.managePage - 1) * state.managePageSize,
+      state.managePage * state.managePageSize,
+    );
+    const grouped =
+      !viewingDeleted &&
+      state.filter === "all" &&
+      state.manageSort === "priority";
+    const hasFilters = Boolean(
+      query ||
+      (!viewingDeleted && state.filter !== "all") ||
+      state.dateFrom ||
+      state.dateTo,
+    );
+    const dateSelected = Boolean(state.dateFrom || state.dateTo);
+    const dateLabel = (date) =>
+      new Date(`${date}T00:00`).toLocaleDateString("th-TH", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      });
+    const context = [
+      query ? `ค้นหา “${state.search.trim()}”` : "",
+      state.dateFrom
+        ? `${viewingDeleted ? "ลบตั้งแต่" : "เริ่มตั้งแต่"} ${dateLabel(state.dateFrom)}`
+        : "",
+      state.dateTo ? `ถึง ${dateLabel(state.dateTo)}` : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    const sortOptions = viewingDeleted
+      ? [
+          ["priority", "วันที่ลบล่าสุดก่อน"],
+          ["oldest", "วันที่ลบเก่าสุดก่อน"],
+        ]
+      : [
+          ["priority", "สถานะและวันเริ่ม"],
+          ["newest", "วันเริ่มล่าสุดก่อน"],
+          ["oldest", "วันเริ่มเก่าสุดก่อน"],
+        ];
+    const selectedSort =
+      viewingDeleted && state.manageSort === "newest"
+        ? "priority"
+        : state.manageSort;
+    const emptyTitle = viewingDeleted
+      ? hasFilters && history.length
+        ? "ไม่พบประวัติที่ตรงกับตัวกรอง"
+        : "ยังไม่มีประวัติการลบ"
+      : store.workshops.length
+        ? "ไม่พบเวิร์กช็อปที่ตรงกับตัวกรอง"
+        : "ยังไม่มีเวิร์กช็อป";
+    return `<section class="manage-view" data-management-view="${viewingDeleted ? "deleted" : "current"}">
+      ${title("WORKSHOP MANAGEMENT", "จัดการเวิร์กช็อป", "ค้นหา ติดตามสถานะ และจัดการกิจกรรมของคุณ", '<button class="btn primary" data-action="add-workshop"><i class="fa-solid fa-plus" aria-hidden="true"></i> เพิ่มเวิร์กช็อป</button>')}
+      <nav class="manage-view-switch" aria-label="มุมมองรายการเวิร์กช็อป"><button type="button" data-action="manage-view" data-id="current" aria-pressed="${!viewingDeleted}">กิจกรรมปัจจุบัน</button><button type="button" data-action="manage-view" data-id="deleted" aria-pressed="${viewingDeleted}"><i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i> ประวัติการลบ</button></nav>
+      <section class="manage-filters" aria-label="ค้นหาและกรองเวิร์กช็อป"><div class="manage-filter-row"><div class="manage-search"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><input id="search" type="search" aria-label="ค้นหาเวิร์กช็อป" placeholder="${viewingDeleted ? "ค้นหาชื่อกิจกรรม รหัส หรือผู้ลบ" : "ค้นหาชื่อเวิร์กช็อปหรือสถานที่"}" value="${esc(state.search)}"></div>${viewingDeleted ? "" : `<select id="phase-filter" aria-label="สถานะกิจกรรม"><option value="all" ${state.filter === "all" ? "selected" : ""}>ทุกสถานะ</option>${managementStatuses.map(([value, label]) => `<option value="${value}" ${state.filter === value ? "selected" : ""}>${label}</option>`).join("")}</select>`}
+      <div id="manage-date-panel" class="manage-date-panel"><label for="date-from">${viewingDeleted ? "ลบตั้งแต่" : "ตั้งแต่"} <input id="date-from" type="date" aria-label="${viewingDeleted ? "วันที่ลบตั้งแต่" : "วันเริ่มตั้งแต่"}" value="${esc(state.dateFrom || "")}"></label><label for="date-to">ถึง <input id="date-to" type="date" aria-label="ถึงวันที่" value="${esc(state.dateTo || "")}"></label>${dateSelected ? '<button class="btn small" data-action="clear-manage-dates">ล้างวันที่</button>' : ""}</div></div></section>
+      <section class="manage-results" id="manage-results" tabindex="-1" aria-label="ผลการค้นหาเวิร์กช็อป"><div class="manage-results-heading"><div><h2>${viewingDeleted ? "กิจกรรมที่ลบไปแล้ว" : state.filter === "all" ? "รายการเวิร์กช็อป" : `<span class="manage-status manage-status-${esc(state.filter)}">${managementStatusLabel(state.filter)}</span>`}<span class="manage-result-count">${number(filtered.length)} รายการ</span></h2><p class="manage-result-context">${esc(context)}</p></div><div class="manage-results-tools">${hasFilters ? '<button class="manage-reset" data-action="reset-manage-filters">ล้างตัวกรอง</button>' : ""}<label class="manage-sort-label">เรียงตาม <select id="manage-sort" aria-label="เรียงลำดับเวิร์กช็อป">${sortOptions
+        .map(
+          ([value, label]) =>
+            `<option value="${value}" ${selectedSort === value ? "selected" : ""}>${label}</option>`,
+        )
+        .join("")}</select></label></div></div>
+      ${filtered.length ? (viewingDeleted ? deletedWorkshopsTable(shown) : managementTable(shown, grouped, state.filter === "all" && !grouped)) + managementPagination(filtered.length, pages) : `<div class="manage-empty"><i class="fa-regular fa-folder-open" aria-hidden="true"></i><h3>${emptyTitle}</h3><p>${viewingDeleted ? "รายการที่ลบจะถูกเก็บเป็นประวัติสำหรับแอดมิน" : store.workshops.length ? "ลองเปลี่ยนคำค้นหา สถานะ หรือช่วงวันที่" : "เพิ่มเวิร์กช็อปแรกเพื่อเริ่มรับผู้เข้าร่วม"}</p>${hasFilters ? '<button class="btn" data-action="reset-manage-filters">ล้างตัวกรอง</button>' : ""}</div>`}
+      </section></section>`;
+  }
+  function closeWorkshopMenu(returnFocus = false) {
+    $("#workshop-actions-menu")?.remove();
+    if (workshopMenuTrigger) {
+      workshopMenuTrigger.setAttribute("aria-expanded", "false");
+      if (returnFocus && workshopMenuTrigger.isConnected)
+        workshopMenuTrigger.focus();
+    }
+    workshopMenuTrigger = null;
+  }
+  function openWorkshopMenu(button) {
+    if (workshopMenuTrigger === button) return closeWorkshopMenu(true);
+    closeWorkshopMenu();
+    const w = store.workshops.find((item) => item.id === button.dataset.id);
+    if (!w || !staff()) return;
+    const menu = document.createElement("div");
+    menu.id = "workshop-actions-menu";
+    menu.className = "workshop-actions-menu";
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("aria-label", `จัดการ ${w.title}`);
+    const item = (action, icon, label, danger = false) =>
+      `<button type="button" role="menuitem" class="${danger ? "is-danger" : ""}" data-action="${action}" data-id="${esc(w.id)}"><i class="fa-solid ${icon}" aria-hidden="true"></i>${label}</button>`;
+    menu.innerHTML =
+      (w.attendanceFinalizedAt
+        ? ""
+        : item("edit-workshop", "fa-pen", "แก้ไขเวิร์กช็อป")) +
+      (!w.closed && !w.cancelled && scheduledPhase(w) !== "finished"
+        ? item("close-workshop", "fa-pause", "ปิดรับสมัคร")
+        : "") +
+      item("delete-workshop", "fa-trash-can", "ลบเวิร์กช็อป", true);
+    document.body.appendChild(menu);
+    const rect = button.getBoundingClientRect?.() || {
+      right: 230,
+      bottom: 100,
+      top: 56,
+    };
+    const height = menu.querySelectorAll("button").length * 44 + 16;
+    menu.style.left = `${Math.max(12, Math.min(rect.right - 224, (window.innerWidth || 1024) - 236))}px`;
+    menu.style.top = `${Math.max(12, rect.bottom + height + 8 > (window.innerHeight || 768) ? rect.top - height - 8 : rect.bottom + 8)}px`;
+    workshopMenuTrigger = button;
+    button.setAttribute("aria-expanded", "true");
+    menu.querySelector("button")?.focus();
+  }
   function workshops() {
-    const a = staff();
+    if (staff()) return managedWorkshops();
     let list = store.workshops.filter(
       (w) =>
         (state.filter === "all" || phase(w) === state.filter) &&
@@ -937,10 +1290,9 @@
           (w.title + " " + w.place)
             .toLowerCase()
             .includes(state.search.toLowerCase())) &&
-        (a ||
-          (state.view === "open" &&
-            (state.filter !== "all" ||
-              (phase(w) === "upcoming" && occupancy(w.id) < w.capacity))) ||
+        ((state.view === "open" &&
+          (state.filter !== "all" ||
+            (phase(w) === "upcoming" && occupancy(w.id) < w.capacity))) ||
           (state.view === "mine" &&
             store.registrations.some(
               (r) => r.workshopId === w.id && r.userId === state.userId,
@@ -961,7 +1313,7 @@
       list = list.filter((w) => w.start.slice(0, 10) >= state.dateFrom);
     if (state.dateTo)
       list = list.filter((w) => w.start.slice(0, 10) <= state.dateTo);
-    return `${title(a ? "WORKSHOP MANAGEMENT" : "EXPLORE & REGISTER", a ? "จัดการเวิร์กช็อป" : state.view === "mine" ? "กิจกรรมของฉัน" : "ค้นพบเวิร์กช็อปที่ใช่", a ? "กิจกรรมที่สร้างจะปรากฏในฝั่งผู้ใช้งานทันที" : "เลือกกิจกรรมเพื่อพัฒนาทักษะและเปิดประสบการณ์ใหม่", a ? '<button class="btn primary" data-action="add-workshop"><i class="fa-solid fa-plus"></i> เพิ่มเวิร์กช็อป</button>' : "")}${
+    return `${title("EXPLORE & REGISTER", state.view === "mine" ? "กิจกรรมของฉัน" : "ค้นพบเวิร์กช็อปที่ใช่", "เลือกกิจกรรมเพื่อพัฒนาทักษะและเปิดประสบการณ์ใหม่")}${
       state.page === "mine"
         ? '<div class="tabs space" aria-label="สถานะการเข้าร่วม">' +
           [
@@ -987,7 +1339,6 @@
       ["all", "ทั้งหมด"],
       ["upcoming", "เร็วๆ นี้"],
       ["ongoing", "ดำเนินการอยู่"],
-      ["finished", "เสร็จสิ้นแล้ว"],
       ["closed", "ปิดเวิร์กช็อปแล้ว"],
     ]
       .map(
@@ -997,16 +1348,12 @@
       .join(
         "",
       )}</select><label class="date-filter">ตั้งแต่ <input id="date-from" type="date" value="${esc(state.dateFrom || "")}"></label><label class="date-filter">ถึง <input id="date-to" type="date" value="${esc(state.dateTo || "")}"></label><span class="muted">${list.length} กิจกรรม</span></div>${
-      a
-        ? managementTable(
-            list.sort((a, b) => new Date(a.start) - new Date(b.start)),
-          )
-        : '<div class="grid three">' +
-          list
-            .sort((a, b) => new Date(a.start) - new Date(b.start))
-            .map(card)
-            .join("") +
-          "</div>"
+      '<div class="grid three">' +
+      list
+        .sort((a, b) => new Date(a.start) - new Date(b.start))
+        .map(card)
+        .join("") +
+      "</div>"
     }${!list.length ? empty("ไม่พบเวิร์กช็อปที่ตรงกับตัวกรอง") : ""}`;
   }
   function reports() {
@@ -1033,9 +1380,12 @@
             .toLowerCase()
             .includes(query)),
     );
-    return `${title("USER APPROVAL", "อนุมัติผู้ใช้งาน", "ตรวจสอบข้อมูลผู้สมัครใหม่ก่อนเปิดสิทธิ์เข้าใช้งาน")}<div class="staff-work-toolbar"><input id="approval-search" type="search" aria-label="ค้นหาผู้สมัคร" placeholder="ค้นหาชื่อ รหัส หรืออีเมล" value="${esc(state.approvalQuery)}"><select id="approval-status" aria-label="กรองสถานะ"><option value="WAITING" ${state.approvalStatus === "WAITING" ? "selected" : ""}>รออนุมัติ</option><option value="APPROVED" ${state.approvalStatus === "APPROVED" ? "selected" : ""}>อนุมัติแล้ว</option><option value="REJECTED" ${state.approvalStatus === "REJECTED" ? "selected" : ""}>ปฏิเสธแล้ว</option><option value="all" ${state.approvalStatus === "all" ? "selected" : ""}>ทั้งหมด</option></select><span class="muted">${number(list.length)} รายการ</span></div><div class="panel space tablewrap"><table><thead><tr><th>ผู้สมัคร</th><th>ประเภท / รหัส</th><th>ช่องทางติดต่อ</th><th>คณะ / สาขา</th><th>สถานะ / จัดการ</th></tr></thead><tbody>${list.map((u) => `<tr><td><b>${esc(u.name)}</b></td><td>${esc(u.type)}<br>${esc(u.code)}</td><td>${esc(u.email || "—")}<br>${esc(u.phone || "—")}</td><td>${esc(u.faculty)}<br><span class="muted">${esc(u.major || "—")}</span></td><td>${badge(u.status)}${u.status === "WAITING" ? `<div class="staff-row-actions"><button class="btn small primary" data-action="approve" data-id="${u.id}">อนุมัติ</button><button class="btn small danger" data-action="reject" data-id="${u.id}">ปฏิเสธ</button></div>` : ""}</td></tr>`).join("") || `<tr><td colspan="5">${empty("ไม่พบผู้สมัครที่ตรงกับตัวกรอง")}</td></tr>`}</tbody></table></div>`;
+    return `${title("USER APPROVAL", "อนุมัติผู้ใช้งาน", "ตรวจสอบข้อมูลผู้สมัครใหม่ก่อนเปิดสิทธิ์เข้าใช้งาน")}<div class="staff-work-toolbar staff-filter-grid approvals-filter-grid"><input id="approval-search" type="search" aria-label="ค้นหาผู้สมัคร" placeholder="ค้นหาชื่อ รหัส หรืออีเมล" value="${esc(state.approvalQuery)}"><select id="approval-status" aria-label="กรองสถานะ"><option value="WAITING" ${state.approvalStatus === "WAITING" ? "selected" : ""}>รออนุมัติ</option><option value="APPROVED" ${state.approvalStatus === "APPROVED" ? "selected" : ""}>อนุมัติแล้ว</option><option value="REJECTED" ${state.approvalStatus === "REJECTED" ? "selected" : ""}>ปฏิเสธแล้ว</option><option value="all" ${state.approvalStatus === "all" ? "selected" : ""}>ทั้งหมด</option></select><span class="muted staff-filter-summary">${number(list.length)} รายการ</span></div><div class="panel space tablewrap"><table><thead><tr><th>ผู้สมัคร</th><th>ประเภท / รหัส</th><th>ช่องทางติดต่อ</th><th>คณะ / สาขา</th><th>สถานะ / จัดการ</th></tr></thead><tbody>${list.map((u) => `<tr><td><b>${esc(u.name)}</b></td><td>${esc(u.type)}<br>${esc(u.code)}</td><td>${esc(u.email || "—")}<br>${esc(u.phone || "—")}</td><td>${esc(u.faculty)}<br><span class="muted">${esc(u.major || "—")}</span></td><td>${badge(u.status)}${u.status === "WAITING" ? `<div class="staff-row-actions"><button class="btn small primary" data-action="approve" data-id="${u.id}">อนุมัติ</button><button class="btn small danger" data-action="reject" data-id="${u.id}">ปฏิเสธ</button></div>` : ""}</td></tr>`).join("") || `<tr><td colspan="5">${empty("ไม่พบผู้สมัครที่ตรงกับตัวกรอง")}</td></tr>`}</tbody></table></div>`;
   }
   function participantsV2() {
+    const selectedWorkshop = store.workshops.find(
+      (w) => w.id === participantWorkshop,
+    );
     const query = state.participantQuery.toLowerCase();
     const list = store.registrations.filter((r) => {
       const u = store.users.find((x) => x.id === r.userId);
@@ -1050,16 +1400,237 @@
             .includes(query))
       );
     });
-    return `${title("PARTICIPANT LIST", "รายชื่อผู้เข้าร่วมอบรม", "ค้นหา กรอง และบันทึกผลการเข้าร่วมจากรายการจริง")}<div class="staff-work-toolbar"><select id="participant-filter" aria-label="เลือกเวิร์กช็อป"><option value="all">ทุกเวิร์กช็อป</option>${store.workshops.map((w) => `<option value="${w.id}" ${participantWorkshop === w.id ? "selected" : ""}>${esc(w.title)}</option>`).join("")}</select><input id="participant-search" type="search" aria-label="ค้นหาผู้เข้าร่วม" placeholder="ค้นหาชื่อหรือรหัสนักศึกษา" value="${esc(state.participantQuery)}"><select id="participant-status" aria-label="กรองสถานะ"><option value="all" ${state.participantStatus === "all" ? "selected" : ""}>ทุกสถานะ</option><option value="PENDING" ${state.participantStatus === "PENDING" ? "selected" : ""}>รอเข้าร่วม</option><option value="ATTENDED" ${state.participantStatus === "ATTENDED" ? "selected" : ""}>เข้าร่วมแล้ว</option><option value="ABSENT" ${state.participantStatus === "ABSENT" ? "selected" : ""}>ไม่เข้าร่วม</option><option value="CANCELLED" ${state.participantStatus === "CANCELLED" ? "selected" : ""}>ยกเลิก</option></select><button class="btn small" data-action="export-participants"><i class="fa-solid fa-download" aria-hidden="true"></i> Export CSV</button></div>${
+    return `${title("PARTICIPANT LIST", "รายชื่อผู้เข้าร่วมอบรม", "ค้นหา กรอง และบันทึกผลการเข้าร่วมจากรายการจริง")}${attendancePanel(selectedWorkshop)}<div class="staff-work-toolbar staff-filter-grid participants-filter-grid"><input id="participant-search" type="search" aria-label="ค้นหาผู้เข้าร่วม" placeholder="ค้นหาชื่อหรือรหัสนักศึกษา" value="${esc(state.participantQuery)}"><select id="participant-filter" aria-label="เลือกเวิร์กช็อป"><option value="all">ทุกเวิร์กช็อป</option>${store.workshops.map((w) => `<option value="${w.id}" ${participantWorkshop === w.id ? "selected" : ""}>${esc(w.title)} · ${esc(fmt(w.start))}${w.attendanceFinalizedAt ? " · ยืนยันผลแล้ว" : ""}</option>`).join("")}</select><select id="participant-status" aria-label="กรองสถานะ"><option value="all" ${state.participantStatus === "all" ? "selected" : ""}>ทุกสถานะ</option><option value="PENDING" ${state.participantStatus === "PENDING" ? "selected" : ""}>รอบันทึกผล</option><option value="ATTENDED" ${state.participantStatus === "ATTENDED" ? "selected" : ""}>เข้าร่วมแล้ว</option><option value="ABSENT" ${state.participantStatus === "ABSENT" ? "selected" : ""}>ไม่เข้าร่วม</option><option value="CANCELLED" ${state.participantStatus === "CANCELLED" ? "selected" : ""}>ยกเลิก</option></select><button class="btn small staff-filter-export" data-action="export-participants"><i class="fa-solid fa-download" aria-hidden="true"></i> Export CSV</button></div>${
       list.length
         ? `<div class="panel tablewrap"><table><thead><tr><th>ลำดับ</th><th>ชื่อ-นามสกุล</th><th>รหัสประจำตัว</th><th>สถานะ</th><th>เช็กชื่อ</th></tr></thead><tbody>${list
             .map((r, i) => {
               const u = store.users.find((x) => x.id === r.userId);
-              return `<tr><td>${i + 1}</td><td><b>${esc(u?.name || "ไม่พบข้อมูล")}</b></td><td>${esc(u?.code || "—")}</td><td>${badge(r.status)}</td><td>${r.status !== "CANCELLED" ? `<button class="btn small primary" data-action="attend" data-id="${r.id}">เข้าร่วมงาน</button><button class="btn small danger" data-action="absent" data-id="${r.id}">ไม่เข้าร่วม</button>` : "ผู้ใช้ยกเลิกแล้ว"}</td></tr>`;
+              return `<tr><td>${i + 1}</td><td><b>${esc(u?.name || "ไม่พบข้อมูล")}</b></td><td>${esc(u?.code || "—")}</td><td>${badge(r.status)}</td><td>${store.workshops.find((w) => w.id === r.workshopId)?.attendanceFinalizedAt ? '<span class="muted">ยืนยันผลแล้ว</span>' : r.status !== "CANCELLED" ? `<button class="btn small primary" data-action="attend" data-id="${r.id}">เข้าร่วมงาน</button><button class="btn small danger" data-action="absent" data-id="${r.id}">ไม่เข้าร่วม</button>` : "ผู้ใช้ยกเลิกแล้ว"}</td></tr>`;
             })
             .join("")}</tbody></table></div>`
         : empty("ยังไม่มีรายชื่อที่ตรงกับตัวกรอง")
     }`;
+  }
+  const archiveMonths = [
+    "มกราคม",
+    "กุมภาพันธ์",
+    "มีนาคม",
+    "เมษายน",
+    "พฤษภาคม",
+    "มิถุนายน",
+    "กรกฎาคม",
+    "สิงหาคม",
+    "กันยายน",
+    "ตุลาคม",
+    "พฤศจิกายน",
+    "ธันวาคม",
+  ];
+  function attendanceStats(w) {
+    const rows = store.registrations.filter(
+      (r) => r.workshopId === w.id && r.status !== "CANCELLED",
+    );
+    const pending = rows.filter(
+      (r) => !["ATTENDED", "ABSENT"].includes(r.status),
+    ).length;
+    return { total: rows.length, pending, completed: rows.length - pending };
+  }
+  function attendanceTasks() {
+    return pastWorkshops()
+      .filter((w) => !w.attendanceFinalizedAt)
+      .reverse();
+  }
+  function attendancePanel(w) {
+    if (w?.attendanceFinalizedAt)
+      return `<section class="attendance-panel is-complete"><div><h2>ยืนยันผลและเก็บเข้าประวัติแล้ว</h2><p>${esc(w.title)} · ${esc(archiveDateLabel(w.start))} · อ่านอย่างเดียว</p></div></section>`;
+    if (w && +archiveDate(w.end) <= Date.now()) {
+      const { total, pending, completed } = attendanceStats(w);
+      return `<section class="attendance-panel"><div><h2>${pending ? `รอบันทึกผลอีก ${number(pending)} คน` : "บันทึกผลครบแล้ว รอยืนยัน"}</h2><p>${esc(w.title)} · ${esc(archiveDateLabel(w.start))}</p><p>บันทึกแล้ว ${number(completed)} / ${number(total)} คน · ไม่นับรายการที่ยกเลิกลงทะเบียน${!total ? " · ไม่มีผู้ลงทะเบียนที่ต้องบันทึกผล" : ""}</p></div><div class="attendance-actions">${pending ? `<button class="btn small" data-action="attendance-pending" data-id="${esc(w.id)}">ดูรายชื่อที่ยังค้าง</button>` : ""}<button class="btn small primary" data-action="finalize-attendance" data-id="${esc(w.id)}" ${pending || apiSaveCount ? "disabled" : ""}>ยืนยันผลและเก็บเข้าประวัติ</button></div></section>`;
+    }
+    const tasks = attendanceTasks();
+    return tasks.length
+      ? `<section class="attendance-panel"><div><h2>มี ${number(tasks.length)} เวิร์กช็อปรอบันทึกหรือยืนยันผล</h2><p>กิจกรรมที่จบแล้วต้องระบุผลให้ครบทุกคนก่อนเก็บเข้าประวัติ</p></div><button class="btn small" data-action="participants-for" data-id="${esc(tasks[0].id)}">เปิดงานที่รอดำเนินการ</button></section>`
+      : "";
+  }
+  function archivedWorkshops() {
+    return pastWorkshops().filter(
+      (w) => w.attendanceFinalizedAt && attendanceStats(w).pending === 0,
+    );
+  }
+  // Local workshop values describe Thailand time, regardless of the viewer's timezone.
+  function archiveDate(value) {
+    const text = String(value || "");
+    return new Date(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(text)
+        ? text + "+07:00"
+        : text,
+    );
+  }
+  function archivePeriod(w) {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Bangkok",
+      year: "numeric",
+      month: "numeric",
+    }).formatToParts(archiveDate(w.start));
+    return Object.fromEntries(
+      parts
+        .filter((p) => ["year", "month"].includes(p.type))
+        .map((p) => [p.type, Number(p.value)]),
+    );
+  }
+  function archiveDateLabel(value) {
+    return archiveDate(value).toLocaleString("th-TH", {
+      timeZone: "Asia/Bangkok",
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+  }
+  function pastWorkshops() {
+    return store.workshops
+      .filter(
+        (w) =>
+          !w.cancelled &&
+          Number.isFinite(+archiveDate(w.start)) &&
+          +archiveDate(w.end) < Date.now(),
+      )
+      .sort(
+        (a, b) =>
+          archiveDate(b.start) - archiveDate(a.start) ||
+          a.id.localeCompare(b.id),
+      );
+  }
+  function archiveHash() {
+    const params = new URLSearchParams();
+    if (state.archiveYear) params.set("year", state.archiveYear);
+    if (state.archiveMonth !== "all") params.set("month", state.archiveMonth);
+    if (state.archiveWorkshop) params.set("workshop", state.archiveWorkshop);
+    return "#archive" + (params.size ? "?" + params : "");
+  }
+  function archiveReplaceRoute() {
+    window.history?.replaceState?.(null, "", archiveHash());
+  }
+  function archivePagination(total, roster = false) {
+    const key = roster ? "archiveParticipantPage" : "archivePage";
+    const pages = Math.max(1, Math.ceil(total / 10));
+    state[key] = Math.max(1, Math.min(state[key], pages));
+    const current = state[key];
+    if (!total) return "";
+    return `<div class="manage-pagination"><span class="manage-range" role="status">แสดง ${number((current - 1) * 10 + 1)}–${number(Math.min(current * 10, total))} จาก ${number(total)} รายการ</span><nav class="manage-page-links" aria-label="หน้ารายการย้อนหลัง"><button type="button" data-action="archive-page" data-id="${current - 1}" aria-label="หน้าก่อนหน้า" ${current === 1 ? "disabled" : ""}>‹</button><span class="archive-page-number">หน้า ${number(current)} / ${number(pages)}</span><button type="button" data-action="archive-page" data-id="${current + 1}" aria-label="หน้าถัดไป" ${current === pages ? "disabled" : ""}>›</button></nav></div>`;
+  }
+  function archiveRegistrations(workshopId) {
+    const query = state.archiveParticipantQuery.trim().toLowerCase();
+    const users = new Map(store.users.map((u) => [u.id, u]));
+    return store.registrations
+      .filter((r) => {
+        const u = users.get(r.userId);
+        return (
+          r.workshopId === workshopId &&
+          (state.archiveParticipantStatus === "all" ||
+            r.status === state.archiveParticipantStatus) &&
+          (!query ||
+            `${u?.name || ""} ${u?.code || ""} ${u?.email || ""}`
+              .toLowerCase()
+              .includes(query))
+        );
+      })
+      .sort((a, b) => {
+        const name = (id) => users.get(id)?.name || "";
+        return (
+          name(a.userId).localeCompare(name(b.userId), "th") ||
+          a.id.localeCompare(b.id)
+        );
+      });
+  }
+  function archiveRoster(w) {
+    const rows = archiveRegistrations(w.id);
+    const pagination = archivePagination(rows.length, true);
+    const offset = (state.archiveParticipantPage - 1) * 10;
+    const period = archivePeriod(w);
+    return `<section class="manage-view archive-view archive-roster"><button type="button" class="archive-back" data-action="archive-back"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> กลับไปรายการย้อนหลัง</button>
+      ${title("WORKSHOP ARCHIVE", esc(w.title), `${archiveMonths[period.month - 1]} พ.ศ. ${period.year + 543} · รายชื่อผู้เข้าร่วมอบรม`, '<span class="archive-readonly"><i class="fa-solid fa-lock" aria-hidden="true"></i> อ่านอย่างเดียว</span>')}
+      <div class="archive-context"><div><i class="fa-regular fa-calendar" aria-hidden="true"></i><span>${esc(archiveDateLabel(w.start))} – ${esc(archiveDateLabel(w.end))}<br><span class="muted">${esc(w.place || "ไม่ระบุสถานที่")}</span></span></div><button class="btn small" data-action="archive-detail" data-id="${esc(w.id)}">รายละเอียดกิจกรรม</button></div>
+      <div class="manage-filters archive-roster-filters"><label class="manage-search"><span class="sr-only">ค้นหาผู้เข้าร่วมย้อนหลัง</span><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><input id="archive-participant-search" type="search" placeholder="ค้นหาชื่อ รหัส หรืออีเมล" value="${esc(state.archiveParticipantQuery)}"></label><label class="archive-field"><span>สถานะการเข้าร่วม</span><select id="archive-participant-status">${[
+        ["all", "ทุกสถานะ"],
+        ["ATTENDED", "เข้าร่วมแล้ว"],
+        ["ABSENT", "ไม่เข้าร่วม"],
+        ["CANCELLED", "ยกเลิกการลงทะเบียน"],
+      ]
+        .map(
+          ([value, label]) =>
+            `<option value="${value}" ${value === state.archiveParticipantStatus ? "selected" : ""}>${label}</option>`,
+        )
+        .join(
+          "",
+        )}</select></label><button class="btn small" data-action="archive-export" ${!rows.length ? "disabled" : ""}><i class="fa-solid fa-download" aria-hidden="true"></i> ส่งออก CSV</button></div>
+      <div class="manage-results-heading"><p>${number(rows.length)} รายชื่อ${state.archiveParticipantStatus !== "all" || state.archiveParticipantQuery ? "ที่ตรงกับตัวกรอง" : ""}</p></div>
+      ${
+        rows.length
+          ? `<div class="panel tablewrap"><table class="archive-roster-table"><thead><tr><th scope="col">ลำดับ</th><th scope="col">ชื่อ–นามสกุล</th><th scope="col">รหัสประจำตัว</th><th scope="col">สถานะการเข้าร่วม</th></tr></thead><tbody>${rows
+              .slice(offset, offset + 10)
+              .map((r, i) => {
+                const u = store.users.find((u) => u.id === r.userId);
+                return `<tr><td>${offset + i + 1}</td><td><b>${esc(u?.name || "ไม่พบข้อมูลผู้ใช้งาน")}</b></td><td>${esc(u?.code || "—")}</td><td>${badge(r.status)}</td></tr>`;
+              })
+              .join("")}</tbody></table></div>`
+          : empty("ไม่พบรายชื่อที่ตรงกับตัวกรอง")
+      }${pagination}</section>`;
+  }
+  function workshopArchive() {
+    const all = archivedWorkshops();
+    const years = [...new Set(all.map((w) => archivePeriod(w).year))].sort(
+      (a, b) => b - a,
+    );
+    const selected = all.find((w) => w.id === state.archiveWorkshop);
+    if (selected) return archiveRoster(selected);
+    const unfinished = pastWorkshops().find(
+      (w) => w.id === state.archiveWorkshop,
+    );
+    if (unfinished)
+      return `<section class="manage-view archive-view">${title("WORKSHOP RESULTS", "กิจกรรมนี้ยังไม่พร้อมเก็บเข้าประวัติ", "กรุณาบันทึกผลให้ครบและยืนยันผลก่อน")}${attendancePanel(unfinished)}<button class="btn" data-action="participants-for" data-id="${esc(unfinished.id)}">ไปหน้าบันทึกผล</button></section>`;
+    const missingSelection = !!state.archiveWorkshop;
+    state.archiveWorkshop = null;
+    if (!years.includes(state.archiveYear)) {
+      const currentYear = Number(
+        new Intl.DateTimeFormat("en", {
+          timeZone: "Asia/Bangkok",
+          year: "numeric",
+        }).format(new Date()),
+      );
+      state.archiveYear =
+        years.find((year) => year < currentYear) || years[0] || null;
+    }
+    const yearRows = all.filter(
+      (w) => archivePeriod(w).year === state.archiveYear,
+    );
+    const query = state.archiveQuery.trim().toLowerCase();
+    const rows = yearRows.filter(
+      (w) =>
+        (state.archiveMonth === "all" ||
+          archivePeriod(w).month === Number(state.archiveMonth)) &&
+        (!query || `${w.title} ${w.place || ""}`.toLowerCase().includes(query)),
+    );
+    const pagination = archivePagination(rows.length);
+    const offset = (state.archivePage - 1) * 10;
+    const period = state.archiveYear
+      ? `${state.archiveMonth === "all" ? "ทุกเดือน" : archiveMonths[Number(state.archiveMonth) - 1]} · พ.ศ. ${state.archiveYear + 543}`
+      : "ยังไม่มีข้อมูลย้อนหลัง";
+    const counts = new Map();
+    for (const r of store.registrations)
+      counts.set(r.workshopId, (counts.get(r.workshopId) || 0) + 1);
+    return `<section class="manage-view archive-view">${title("WORKSHOP ARCHIVE", "เวิร์กช็อปย้อนหลัง", "กิจกรรมที่บันทึกผลครบและยืนยันเก็บเข้าประวัติแล้ว")}${attendancePanel()}
+      <div class="manage-filters archive-filters"><label class="archive-field"><span>ปีที่จัดกิจกรรม (พ.ศ.)</span><select id="archive-year" ${!years.length ? "disabled" : ""}>${years.length ? years.map((year) => `<option value="${year}" ${year === state.archiveYear ? "selected" : ""}>พ.ศ. ${year + 543}</option>`).join("") : '<option value="">ยังไม่มีข้อมูล</option>'}</select></label><label class="archive-field"><span>เดือนที่เริ่มกิจกรรม</span><select id="archive-month" ${!years.length ? "disabled" : ""}><option value="all" ${state.archiveMonth === "all" ? "selected" : ""}>ทุกเดือน</option>${archiveMonths.map((month, index) => `<option value="${index + 1}" ${state.archiveMonth === String(index + 1) ? "selected" : ""}>${month}</option>`).join("")}</select></label><label class="manage-search"><span class="sr-only">ค้นหาเวิร์กช็อปย้อนหลัง</span><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><input id="archive-search" type="search" placeholder="ค้นหาชื่อเวิร์กช็อป หรือสถานที่" value="${esc(state.archiveQuery)}"></label></div>
+      ${missingSelection ? '<p class="notice" role="status">ไม่พบกิจกรรมย้อนหลังนี้ อาจถูกลบหรือเปลี่ยนแปลงแล้ว</p>' : ""}
+      <div class="manage-results-heading"><div><h2>${period}</h2><p>${number(rows.length)} กิจกรรม · เรียงจากวันที่จัดล่าสุด</p></div>${state.archiveMonth !== "all" || query ? '<button class="btn small" data-action="archive-clear">ล้างตัวกรอง</button>' : ""}</div>
+      ${
+        rows.length
+          ? `<div class="panel tablewrap"><table class="manage-table archive-table"><thead><tr><th scope="col">เวิร์กช็อป</th><th scope="col">วันที่เริ่มกิจกรรม</th><th scope="col">รายชื่อ</th><th scope="col"><span class="sr-only">เปิดรายชื่อ</span></th></tr></thead><tbody>${rows
+              .slice(offset, offset + 10)
+              .map((w) => {
+                const count = counts.get(w.id) || 0;
+                return `<tr class="manage-workshop-row" data-workshop-id="${esc(w.id)}"><td><button class="manage-workshop-title" data-action="archive-detail" data-id="${esc(w.id)}">${esc(w.title)}</button><div class="sub">${esc(w.place || "ไม่ระบุสถานที่")}</div></td><td>${esc(archiveDateLabel(w.start))}</td><td>${number(count)} คน</td><td><button class="btn small" data-action="archive-roster" data-id="${esc(w.id)}">ดูรายชื่อ <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button></td></tr>`;
+              })
+              .join("")}</tbody></table></div>`
+          : `<div class="archive-empty">${empty(all.length ? "ไม่พบกิจกรรมในช่วงเวลาหรือคำค้นนี้" : "ยังไม่มีเวิร์กช็อปที่ยืนยันผลแล้ว")}${all.length ? '<p class="muted">ลองเลือกปี เดือน หรือเปลี่ยนคำค้นหา</p>' : ""}</div>`
+      }${pagination}<p class="archive-footnote">จัดกลุ่มตามวันที่เริ่มกิจกรรม · เวิร์กช็อปที่ถูกลบอยู่ในเมนูจัดการเวิร์กช็อป › ประวัติการลบ</p></section>`;
   }
   const complaintStatus = (c) =>
     ({
@@ -1207,10 +1778,23 @@
     "manage",
     "approvals",
     "participants",
+    "archive",
     "complaints",
   ];
   const requestedPage = () => {
-    const page = window.location?.hash?.slice(1);
+    const [page, query = ""] = (window.location?.hash || "")
+      .slice(1)
+      .split("?");
+    if (page === "archive") {
+      const params = new URLSearchParams(query);
+      state.archiveYear = Number(params.get("year")) || null;
+      const month = Number(params.get("month"));
+      state.archiveMonth = month >= 1 && month <= 12 ? String(month) : "all";
+      state.archiveWorkshop = params.get("workshop") || null;
+      state.archiveParticipantQuery = "";
+      state.archiveParticipantStatus = "all";
+      state.archiveParticipantPage = 1;
+    }
     return routePages.includes(page) ? page : "dashboard";
   };
   window.addEventListener?.("popstate", () => {
@@ -1221,7 +1805,36 @@
     render();
     restoringNavigation = false;
   });
+  function renderBootstrap() {
+    const loadingData = bootstrapStage === "data";
+    let screen = $(".app-bootstrap");
+    // Change only the status text so the logo animation stays steady.
+    if (!screen || screen.dataset.bootstrapError !== String(bootstrapError)) {
+      $("#app").innerHTML =
+        `<main class="app-bootstrap" data-bootstrap-error="${bootstrapError}">
+        <section class="app-bootstrap-content" ${bootstrapError ? 'role="alert"' : 'role="status" aria-live="polite" aria-busy="true"'}>
+          <div class="app-bootstrap-emblem" aria-hidden="true"><span class="app-bootstrap-orbit"></span><img class="app-bootstrap-logo" src="${LOGO}" alt="" width="90" height="92"></div>
+          <h1>${bootstrapError ? "ขอเวลาเชื่อมต่ออีกครั้ง" : "กำลังเตรียมพื้นที่การเรียนรู้"}</h1>
+          <p id="bootstrap-message"></p>
+          <div class="app-bootstrap-progress" aria-hidden="true"><span></span></div>
+          ${bootstrapError ? '<button class="btn primary app-bootstrap-retry" type="button" data-action="retry-bootstrap">ลองเชื่อมต่ออีกครั้ง <span aria-hidden="true">↗</span></button>' : ""}
+        </section>
+      </main>`;
+      screen = $(".app-bootstrap");
+    }
+    screen.dataset.bootstrapStage = bootstrapStage;
+    $("#bootstrap-message").textContent = bootstrapError
+      ? "ยังโหลดข้อมูลไม่ได้ กรุณาตรวจสอบการเชื่อมต่อแล้วลองอีกครั้ง"
+      : loadingData
+        ? "กำลังโหลดเวิร์กช็อปและข้อมูลบัญชีของคุณ"
+        : "กำลังตรวจสอบการเข้าสู่ระบบของคุณ";
+  }
   function render() {
+    closeWorkshopMenu();
+    // A missing user is not a signed-out session until bootstrap completes.
+    if (!ready) {
+      return renderBootstrap();
+    }
     let content;
     if (!user()) content = login();
     else if (state.page === "dashboard")
@@ -1232,6 +1845,7 @@
           manage: workshops,
           approvals: approvalsV2,
           participants: participantsV2,
+          archive: workshopArchive,
           complaints,
         }[state.page] || learnerDashboard
       )();
@@ -1244,7 +1858,12 @@
           state.page
         ] || learnerDashboard
       )();
-    const view = [state.portal, state.userId, state.page].join(":");
+    const view = [
+      state.portal,
+      state.userId,
+      state.page,
+      state.page === "archive" ? state.archiveWorkshop || "list" : "",
+    ].join(":");
     const changed = view !== previousView;
     const hadView = previousView !== null;
     $("#app").innerHTML = shell(content);
@@ -1267,7 +1886,8 @@
       !restoringNavigation &&
       window.history?.pushState
     ) {
-      const hash = "#" + state.page;
+      const hash =
+        state.page === "archive" && staff() ? archiveHash() : "#" + state.page;
       if (window.location.hash !== hash)
         window.history.pushState(null, "", hash);
     }
@@ -1674,7 +2294,27 @@
   document.addEventListener("pointercancel", () => {
     promoPointerStart = null;
   });
+  document.addEventListener("focusin", (e) => {
+    if (!e.target.closest(".account-menu")) closeAccountMenu();
+    if (
+      !e.target.closest('#workshop-actions-menu, [data-action="workshop-menu"]')
+    )
+      closeWorkshopMenu();
+  });
+  window.addEventListener?.("resize", () => closeWorkshopMenu());
+  document.addEventListener(
+    "scroll",
+    (e) => {
+      if (!e.target.closest?.("#workshop-actions-menu")) closeWorkshopMenu();
+    },
+    true,
+  );
   document.addEventListener("click", async (e) => {
+    if (!e.target.closest(".account-menu")) closeAccountMenu();
+    if (
+      !e.target.closest('#workshop-actions-menu, [data-action="workshop-menu"]')
+    )
+      closeWorkshopMenu();
     const b = e.target.closest("[data-action]");
     if (!b || b.disabled) return;
     let a = b.dataset.action;
@@ -1682,6 +2322,198 @@
     if (a === "answer-yes" || a === "answer-no")
       return finishConfirm(a === "answer-yes");
     if (pendingConfirm) return;
+    if (staff() && a === "attendance-pending") {
+      participantWorkshop = id;
+      state.page = "participants";
+      state.participantQuery = "";
+      state.participantStatus = "PENDING";
+      return render();
+    }
+    if (staff() && a === "finalize-attendance") {
+      if (apiSaveCount) return toast("กำลังบันทึกผล กรุณารอสักครู่");
+      const w = store.workshops.find((w) => w.id === id);
+      if (!w || w.attendanceFinalizedAt || +archiveDate(w.end) > Date.now())
+        return;
+      if (attendanceStats(w).pending)
+        return toast("กรุณาบันทึกผลเข้าร่วมหรือไม่เข้าร่วมให้ครบทุกคนก่อน");
+      if (
+        !(await askConfirm(
+          `ยืนยันผล “${w.title}” และเก็บเข้าประวัติหรือไม่? หลังยืนยันแล้วจะเป็นแบบอ่านอย่างเดียว`,
+        ))
+      )
+        return;
+      if (!staff() || apiSaveCount) return;
+      const actor = state.userId,
+        epoch = apiSaveEpoch;
+      apiSaveCount++;
+      render();
+      try {
+        const result = await apiRequest("/api/workshops/finalize-attendance", {
+          method: "POST",
+          body: JSON.stringify({ workshopId: id, revision: store.revision }),
+        });
+        if (actor !== state.userId || epoch !== apiSaveEpoch) return;
+        Object.assign(store, result.store);
+        overlayDemoImages();
+        state.archiveWorkshop = id;
+        state.archiveYear = archivePeriod(w).year;
+        state.archiveMonth = String(archivePeriod(w).month);
+        state.archiveParticipantQuery = "";
+        state.archiveParticipantStatus = "all";
+        state.archiveParticipantPage = 1;
+        state.page = "archive";
+        toast("ยืนยันผลและเก็บเข้าประวัติแล้ว");
+      } catch (error) {
+        if (actor !== state.userId || epoch !== apiSaveEpoch) return;
+        toast(error.message);
+        if (error.status === 409) {
+          const latest = await apiRequest("/api/store").catch(() => null);
+          if (latest && actor === state.userId && epoch === apiSaveEpoch) {
+            Object.assign(store, latest.store);
+            overlayDemoImages();
+          }
+        }
+      } finally {
+        apiSaveCount--;
+        if (actor === state.userId && epoch === apiSaveEpoch) render();
+      }
+      return;
+    }
+    if (staff() && state.page === "archive" && a.startsWith("archive-")) {
+      const w = archivedWorkshops().find(
+        (w) => w.id === (id || state.archiveWorkshop),
+      );
+      if (a === "archive-roster" && w) {
+        state.archiveWorkshop = w.id;
+        state.archiveParticipantQuery = "";
+        state.archiveParticipantStatus = "all";
+        state.archiveParticipantPage = 1;
+        return render();
+      }
+      if (a === "archive-back") {
+        state.archiveWorkshop = null;
+        return render();
+      }
+      if (a === "archive-detail" && w)
+        return openModal(
+          esc(w.title),
+          `<p class="activity-description">${esc(w.description || "ยังไม่มีรายละเอียดเพิ่มเติม")}</p><p>${esc(archiveDateLabel(w.start))} – ${esc(archiveDateLabel(w.end))}</p><p class="muted">${esc(w.place || "ไม่ระบุสถานที่")} · ${number(w.hours || 0)} ชั่วโมง</p><button class="btn" data-action="close">ปิดรายละเอียด</button>`,
+        );
+      if (a === "archive-page") {
+        state[
+          state.archiveWorkshop ? "archiveParticipantPage" : "archivePage"
+        ] = Math.max(1, Number(id) || 1);
+        render();
+        document
+          .querySelector(".archive-view table")
+          ?.scrollIntoView?.({ block: "start", behavior: "auto" });
+        document.querySelector(".archive-view h1")?.focus?.();
+        return;
+      }
+      if (a === "archive-clear") {
+        state.archiveMonth = "all";
+        state.archiveQuery = "";
+        state.archivePage = 1;
+        render();
+        return archiveReplaceRoute();
+      }
+      if (a === "archive-export" && w) {
+        // Keep spreadsheet formulas inert even if a member's display name starts with '='.
+        const safe = (value) =>
+          /^[\s]*[=+@-]/.test(String(value || "")) ? "'" + value : value;
+        const period = archivePeriod(w);
+        return downloadCsv(
+          `bsru-archive-${period.year + 543}-${String(period.month).padStart(2, "0")}-${w.id.replace(/[^a-zA-Z0-9_-]/g, "")}.csv`,
+          [
+            [
+              "ชื่อ–นามสกุล",
+              "รหัสประจำตัว",
+              "อีเมล",
+              "เวิร์กช็อป",
+              "วันที่เริ่มกิจกรรม",
+              "ปี พ.ศ.",
+              "เดือนที่จัดกิจกรรม",
+              "สถานะการเข้าร่วม",
+            ],
+            ...archiveRegistrations(w.id).map((r) => {
+              const u = store.users.find((u) => u.id === r.userId);
+              return [
+                u?.name || "ไม่พบข้อมูลผู้ใช้งาน",
+                u?.code || "",
+                u?.email || "",
+                w.title,
+                archiveDateLabel(w.start),
+                period.year + 543,
+                archiveMonths[period.month - 1],
+                labels[r.status] || r.status,
+              ].map(safe);
+            }),
+          ],
+        );
+      }
+      return;
+    }
+    if (b.closest("#workshop-actions-menu")) closeWorkshopMenu(true);
+    if (staff() && a === "workshop-menu") return openWorkshopMenu(b);
+    if (staff() && state.page === "manage") {
+      if (a === "manage-view") {
+        state.manageView = id === "deleted" ? "deleted" : "current";
+        state.filter = "all";
+        state.search = "";
+        state.dateFrom = "";
+        state.dateTo = "";
+        state.managePage = 1;
+        state.manageSort = "priority";
+        render();
+        $(
+          `[data-action="manage-view"][data-id="${state.manageView}"]`,
+        )?.focus();
+        return;
+      }
+      if (a === "manage-page") {
+        state.managePage = Math.max(1, Number(id) || 1);
+        render();
+        $("#manage-results")?.focus({ preventScroll: true });
+        $("#manage-results")?.scrollIntoView?.({
+          block: "start",
+          behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)")
+            .matches
+            ? "auto"
+            : "smooth",
+        });
+        return;
+      }
+      if (a === "reset-manage-filters" || a === "clear-manage-dates") {
+        state.dateFrom = "";
+        state.dateTo = "";
+        state.managePage = 1;
+        if (a === "reset-manage-filters") {
+          state.search = "";
+          state.filter = "all";
+        }
+        return render();
+      }
+    }
+    if (a === "retry-bootstrap") return initializeLocalApp();
+    if (a === "toggle-account-menu") {
+      const dropdown = $("#account-dropdown");
+      dropdown.hidden = !dropdown.hidden;
+      b.setAttribute("aria-expanded", String(!dropdown.hidden));
+      return;
+    }
+    if (b.closest("#account-dropdown")) closeAccountMenu(true);
+    if (a === "account-profile") return accountModal();
+    if (a === "account-settings") return accountModal(true);
+    if (a === "account-password") {
+      if (!user()) return;
+      if (!otpAvailable && !passwordResetAvailable)
+        return openModal(
+          "ความปลอดภัยบัญชี",
+          '<div class="notice">ยังไม่ได้เปิดบริการเปลี่ยนรหัสผ่านทางอีเมล กรุณาติดต่อผู้ดูแลระบบเพื่อรีเซ็ตรหัสผ่าน</div><p class="muted">เมื่อเปิดบริการแล้ว ระบบจะส่ง OTP ไปยังอีเมลที่ผูกกับบัญชีเพื่อยืนยันก่อนตั้งรหัสผ่านใหม่</p><button type="button" class="btn" data-action="close">รับทราบ</button>',
+        );
+      clearRecovery();
+      return forgotModal();
+    }
     if (a === "notification-go") {
       closeModal();
       state.page = id === "my-complaints" ? "my-complaints" : "reports";
@@ -1826,11 +2658,14 @@
     if (a === "workshop-detail") return workshopDetail(id);
     if (a === "page") {
       state.page = id;
+      if (id === "archive") state.archiveWorkshop = null;
       state.view = id === "mine" ? "mine" : "open";
       state.search = "";
       state.filter = "all";
       state.dateFrom = "";
       state.dateTo = "";
+      state.managePage = 1;
+      state.manageView = "current";
       if (id === "notifications") {
         state.notificationFilter = "general";
         state.notificationQuery = "";
@@ -1915,10 +2750,10 @@
             : Number(id);
       return render();
     }
-    if (a === "period") {
-      state.period = id;
-      return render();
-    }
+    if (a === "dashboard-month-info" && staff())
+      return toast(
+        `${b.dataset.label}: ${number(Number(b.dataset.count))} รายการลงทะเบียน`,
+      );
     if (a === "view") {
       state.view = id;
       state.page = id === "mine" ? "mine" : "workshops";
@@ -1983,6 +2818,59 @@
       return commit("ยกเลิกการลงทะเบียนแล้ว");
     }
     if (!staff()) return;
+    if (a === "deleted-workshop-detail") return deletedWorkshopDetail(id);
+    if (a === "delete-workshop") {
+      const w = store.workshops.find((w) => w.id === id);
+      if (!w) return toast("ไม่พบเวิร์กช็อป");
+      openModal(
+        "ลบเวิร์กช็อป",
+        `<p>ต้องการลบเวิร์กช็อป “${esc(w.title)}” หรือไม่?</p><p class="notice">รายชื่อผู้ลงทะเบียน ผลประเมิน และชั่วโมงอบรมของกิจกรรมนี้จะถูกลบถาวร และไม่สามารถกู้คืนได้</p><p class="sub">ระบบจะเก็บชื่อกิจกรรม วันจัด และผู้ลบไว้ใน “กิจกรรมที่ลบไปแล้ว” สำหรับแอดมิน</p><div class="row" style="justify-content:flex-end"><button class="btn" data-action="close">ยกเลิก</button><button class="btn danger" data-action="confirm-delete-workshop" data-id="${esc(id)}">ยืนยันลบ</button></div>`,
+      );
+      return;
+    }
+    if (a === "confirm-delete-workshop") {
+      if (b.disabled) return;
+      const buttons = [...document.querySelectorAll("#modal-root button")];
+      buttons.forEach((button) => (button.disabled = true));
+      b.textContent = "กำลังลบ…";
+      const actor = state.userId,
+        epoch = apiSaveEpoch;
+      apiSaveCount++;
+      try {
+        await apiSaving;
+        if (actor !== state.userId || epoch !== apiSaveEpoch) return;
+        updateSync("กำลังลบเวิร์กช็อป…");
+        const result = await apiRequest("/api/workshops/delete", {
+          method: "POST",
+          body: JSON.stringify({ workshopId: id, revision: store.revision }),
+        });
+        if (actor !== state.userId || epoch !== apiSaveEpoch) return;
+        Object.assign(store, result.store);
+        overlayDemoImages();
+        closeModal();
+        render();
+        updateSync("บันทึกแล้ว");
+        toast("ลบเวิร์กช็อปแล้ว");
+      } catch (error) {
+        if (actor !== state.userId || epoch !== apiSaveEpoch) return;
+        updateSync("ลบไม่สำเร็จ");
+        toast(error.message);
+        if (error.status === 409) {
+          const latest = await apiRequest("/api/store").catch(() => null);
+          if (latest && actor === state.userId && epoch === apiSaveEpoch) {
+            Object.assign(store, latest.store);
+            overlayDemoImages();
+            closeModal();
+            render();
+          }
+        }
+      } finally {
+        apiSaveCount--;
+        buttons.forEach((button) => (button.disabled = false));
+        b.textContent = "ยืนยันลบ";
+      }
+      return;
+    }
     if (a === "close-workshop") {
       const w = store.workshops.find((w) => w.id === id);
       if (!w || w.closed || scheduledPhase(w) === "finished")
@@ -2004,10 +2892,16 @@
       return commit("ปิดเวิร์กช็อปแล้ว ฝั่งผู้ใช้ไม่สามารถลงทะเบียนเพิ่มได้");
     }
     if (a === "add-workshop") return workshopModal();
-    if (a === "edit-workshop") return workshopModal(id);
+    if (a === "edit-workshop") {
+      if (store.workshops.find((w) => w.id === id)?.attendanceFinalizedAt)
+        return toast("กิจกรรมนี้ยืนยันผลแล้ว ไม่สามารถแก้ไขได้");
+      return workshopModal(id);
+    }
     if (a === "participants-for") {
       participantWorkshop = id;
       state.page = "participants";
+      state.participantQuery = "";
+      state.participantStatus = "all";
       return render();
     }
     if (a === "approve") {
@@ -2029,6 +2923,10 @@
 
     const r = store.registrations.find((r) => r.id === id);
     if (!r || r.status === "CANCELLED") return;
+    if (
+      store.workshops.find((w) => w.id === r.workshopId)?.attendanceFinalizedAt
+    )
+      return toast("กิจกรรมนี้ยืนยันผลแล้ว ไม่สามารถแก้ไขผลได้");
     const previous = r.status;
     if (
       ["ATTENDED", "ABSENT"].includes(previous) &&
@@ -2062,14 +2960,65 @@
 
     commit("อัปเดตสถานะและชั่วโมงอบรมของผู้ใช้งานแล้ว");
   });
+  document.addEventListener(
+    "toggle",
+    (e) => {
+      if (e.target.id === "staff-upcoming-details")
+        state.dashboardAgendaOpen = e.target.open;
+    },
+    true,
+  );
   document.addEventListener("change", (e) => {
+    if (e.target.id === "dashboard-period" && staff()) {
+      state.dashboardMonths = Number(e.target.value) === 12 ? 12 : 6;
+      render();
+      $("#dashboard-period")?.focus();
+      return;
+    }
+    if (staff() && state.page === "archive") {
+      if (e.target.id === "archive-year") {
+        state.archiveYear = Number(e.target.value);
+        state.archiveMonth = "all";
+        state.archivePage = 1;
+        render();
+        return archiveReplaceRoute();
+      }
+      if (e.target.id === "archive-month") {
+        state.archiveMonth = e.target.value;
+        state.archivePage = 1;
+        render();
+        return archiveReplaceRoute();
+      }
+      if (e.target.id === "archive-participant-status") {
+        state.archiveParticipantStatus = e.target.value;
+        state.archiveParticipantPage = 1;
+        return render();
+      }
+    }
     if (["date-from", "date-to"].includes(e.target.id)) {
       state[e.target.id === "date-from" ? "dateFrom" : "dateTo"] =
         e.target.value;
+      state.managePage = 1;
       render();
     }
     if (e.target.id === "phase-filter") {
       state.filter = e.target.value;
+      state.managePage = 1;
+      render();
+    }
+    if (e.target.id === "manage-sort" && staff()) {
+      state.manageSort = ["priority", "newest", "oldest"].includes(
+        e.target.value,
+      )
+        ? e.target.value
+        : "priority";
+      state.managePage = 1;
+      render();
+    }
+    if (e.target.id === "manage-page-size" && staff()) {
+      const size = Number(e.target.value);
+      state.managePageSize = [10, 25, 50].includes(size) ? size : 10;
+      state.managePage = 1;
       render();
     }
     if (e.target.id === "participant-filter") {
@@ -2106,12 +3055,31 @@
     }
   });
   document.addEventListener("input", (e) => {
+    if (
+      staff() &&
+      state.page === "archive" &&
+      ["archive-search", "archive-participant-search"].includes(e.target.id)
+    ) {
+      const field = e.target.id;
+      const pos = e.target.selectionStart;
+      state[
+        field === "archive-search" ? "archiveQuery" : "archiveParticipantQuery"
+      ] = e.target.value;
+      state[
+        field === "archive-search" ? "archivePage" : "archiveParticipantPage"
+      ] = 1;
+      render();
+      document.getElementById(field)?.focus();
+      document.getElementById(field)?.setSelectionRange?.(pos, pos);
+      return;
+    }
     if (e.target.id === "search") {
       const pos = e.target.selectionStart;
       state.search = e.target.value;
+      state.managePage = 1;
       render();
       $("#search").focus();
-      $("#search").setSelectionRange(pos, pos);
+      $("#search").setSelectionRange?.(pos, pos);
     }
     if (e.target.id === "notification-search") {
       const pos = e.target.selectionStart;
@@ -2150,6 +3118,65 @@
     }
   });
   document.addEventListener("keydown", (e) => {
+    const workshopMenu = $("#workshop-actions-menu");
+    if (workshopMenu) {
+      if (e.key === "Escape" || e.key === "Tab") {
+        if (e.key === "Escape") e.preventDefault();
+        closeWorkshopMenu(true);
+        return;
+      }
+      if (
+        ["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key) &&
+        e.target.closest?.("#workshop-actions-menu")
+      ) {
+        e.preventDefault();
+        const items = [...workshopMenu.querySelectorAll("button")];
+        const index = items.indexOf(e.target);
+        const next =
+          e.key === "Home"
+            ? 0
+            : e.key === "End"
+              ? items.length - 1
+              : (index + (e.key === "ArrowUp" ? -1 : 1) + items.length) %
+                items.length;
+        items[next]?.focus();
+        return;
+      }
+    }
+    const dropdown = $("#account-dropdown");
+    const trigger = e.target.closest?.('[data-action="toggle-account-menu"]');
+    if (dropdown && (trigger || !dropdown.hidden)) {
+      if (e.key === "Escape" && !dropdown.hidden) {
+        e.preventDefault();
+        closeAccountMenu(true);
+        return;
+      }
+      if (
+        ["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key) &&
+        e.target.closest?.(".account-menu")
+      ) {
+        e.preventDefault();
+        dropdown.hidden = false;
+        $('[data-action="toggle-account-menu"]').setAttribute(
+          "aria-expanded",
+          "true",
+        );
+        const items = [...dropdown.querySelectorAll("button")];
+        const index = items.indexOf(e.target);
+        const next =
+          e.key === "Home"
+            ? 0
+            : e.key === "End"
+              ? items.length - 1
+              : e.key === "ArrowUp"
+                ? index < 0
+                  ? items.length - 1
+                  : (index - 1 + items.length) % items.length
+                : (index + 1) % items.length;
+        items[next]?.focus();
+        return;
+      }
+    }
     if (pendingConfirm) {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -2300,6 +3327,7 @@
     if (
       ![
         "login-form",
+        "account-settings-form",
         "support-form",
         "workshop-form",
         "forgot-form",
@@ -2332,6 +3360,27 @@
     const portalAtSubmit = state.portal,
       actorAtSubmit = state.userId;
     try {
+      if (f.id === "account-settings-form") {
+        const name = String(d["account-name"] || "").trim();
+        const phone = String(d["account-phone"] || "").trim();
+        if (!name || name.length > 120)
+          throw Error("กรุณากรอกชื่อไม่เกิน 120 ตัวอักษร");
+        if (phone && !/^0\d{8,9}$/.test(phone))
+          throw Error("กรุณากรอกเบอร์โทรศัพท์ให้ถูกต้อง");
+        await apiSaving;
+        if (state.userId !== actorAtSubmit) return;
+        const result = await apiRequest("/api/account", {
+          method: "POST",
+          body: JSON.stringify({ name, phone }),
+        });
+        if (state.userId !== actorAtSubmit) return;
+        Object.assign(store, result.store);
+        overlayDemoImages();
+        render();
+        closeModal();
+        toast("บันทึกข้อมูลบัญชีแล้ว");
+        return;
+      }
       if (f.id === "reply-form") {
         if (!staff()) throw Error("เฉพาะเจ้าหน้าที่เท่านั้น");
         const c = store.complaints.find((c) => c.id === f.dataset.id);
@@ -2645,6 +3694,12 @@
     }
   });
   async function initializeLocalApp() {
+    if (initializing) return;
+    initializing = true;
+    ready = false;
+    bootstrapError = false;
+    bootstrapStage = "session";
+    render();
     try {
       const session = await apiRequest("/api/session");
       otpAvailable = session.otpAvailable === true;
@@ -2654,8 +3709,8 @@
       if (registrationProvider === "firebase") otpAvailable = false;
       updateSync("เชื่อมต่อแล้ว");
       if (session.user) {
-        apiCsrf = session.csrf;
-        startApiPolling();
+        bootstrapStage = "data";
+        render();
         const source = store.workshops.map((w) => ({ ...w }));
         const loaded = await apiRequest("/api/store");
         Object.assign(store, loaded.store);
@@ -2665,16 +3720,27 @@
         state.portal = session.user.role;
         state.page = requestedPage();
         state.view = state.page === "mine" ? "mine" : "open";
+        apiCsrf = session.csrf;
+      } else {
+        apiCsrf = null;
+        state.userId = null;
       }
       ready = true;
       render();
-      await restoreEmailRegistration();
+      if (session.user) startApiPolling();
+      else await restoreEmailRegistration();
     } catch (error) {
-      ready = true;
+      apiCsrf = null;
+      state.userId = null;
+      // Only an explicit authentication failure should show the login screen.
+      // Network/server errors keep the neutral screen with a retry action.
+      ready = error.status === 401;
+      bootstrapError = !ready;
       render();
-      toast("เชื่อมต่อฐานข้อมูลไม่ได้: " + error.message);
+      if (ready) toast("เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง");
+    } finally {
+      initializing = false;
     }
   }
-  render();
   initializeLocalApp();
 })();

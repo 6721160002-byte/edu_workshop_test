@@ -276,6 +276,48 @@ module.exports = function createStore({
     // Audit entries are generated from validated changes on the server.
     incoming.auditLog = current.auditLog || [];
     const oldAudit = Array.isArray(current.auditLog) ? current.auditLog : [];
+    // Finalization is server-controlled and cannot be forged/removed through a whole-store save.
+    const finalizedIds = new Set(
+      current.workshops.filter((w) => w.attendanceFinalizedAt).map((w) => w.id),
+    );
+    for (const w of incoming.workshops) {
+      const old = current.workshops.find((item) => item.id === w.id);
+      if (
+        ["attendanceFinalizedAt", "attendanceFinalizedBy"].some(
+          (key) => w[key] !== old?.[key],
+        )
+      )
+        throw Object.assign(
+          new Error(
+            "กรุณายืนยันผลผ่านขั้นตอนบันทึกผลให้ครบก่อนเก็บเข้าประวัติ",
+          ),
+          { status: 403 },
+        );
+      if (
+        old?.attendanceFinalizedAt &&
+        user.role === "staff" &&
+        !equalJson(old, w)
+      )
+        throw Object.assign(
+          new Error(
+            "เวิร์กช็อปนี้ยืนยันผลและเก็บเข้าประวัติแล้ว ไม่สามารถแก้ไขได้",
+          ),
+          { status: 409 },
+        );
+    }
+    for (const r of incoming.registrations) {
+      const old = current.registrations.find((item) => item.id === r.id);
+      if (
+        (finalizedIds.has(r.workshopId) || finalizedIds.has(old?.workshopId)) &&
+        !equalJson(old, r)
+      )
+        throw Object.assign(
+          new Error(
+            "กิจกรรมนี้ยืนยันผลและเก็บเข้าประวัติแล้ว ไม่สามารถแก้ไขรายชื่อหรือผลได้",
+          ),
+          { status: 409 },
+        );
+    }
     if (user.role === "staff") {
       const oldUsers = new Map(current.users.map((x) => [x.id, x]));
       for (const next of incoming.users) {

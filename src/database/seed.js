@@ -29,7 +29,7 @@ module.exports = function createSeed({ db, passwordRecord, now }) {
       ) {
         throw Object.assign(
           new Error(
-            "First deployment requires BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD (12+ characters with upper/lower case, a number and a symbol).",
+            "ไม่พบบัญชีผู้ดูแลใน PostgreSQL: ตั้ง BOOTSTRAP_ADMIN_EMAIL และ BOOTSTRAP_ADMIN_PASSWORD ใน .env (รหัสผ่านอย่างน้อย 12 ตัว มีตัวพิมพ์ใหญ่/เล็ก ตัวเลข และสัญลักษณ์) แล้วหยุดและเริ่มเซิร์ฟเวอร์ใหม่ หากใช้ Vercel ให้ตั้งใน Environment Variables แล้ว Redeploy ข้อมูลสมาชิกเดิมยังอยู่",
           ),
           { code: "BOOTSTRAP_ADMIN_REQUIRED" },
         );

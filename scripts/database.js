@@ -12,6 +12,8 @@ const {
 
 function friendly(error) {
   const messages = {
+    BOOTSTRAP_ADMIN_REQUIRED:
+      "ไม่พบบัญชีผู้ดูแลใน PostgreSQL: ตั้ง BOOTSTRAP_ADMIN_EMAIL และ BOOTSTRAP_ADMIN_PASSWORD ใน .env (อย่างน้อย 12 ตัว มีตัวพิมพ์ใหญ่/เล็ก ตัวเลข และสัญลักษณ์) แล้วหยุดและเริ่มเซิร์ฟเวอร์ใหม่",
     "28P01": "รหัสผ่านฐานข้อมูลไม่ถูกต้อง ตรวจ DATABASE_URL ใน .env",
     ENOTFOUND:
       "ไม่พบโฮสต์ฐานข้อมูล ให้คัดลอก Host/User/Port จาก Supabase Connect โดยตรง",

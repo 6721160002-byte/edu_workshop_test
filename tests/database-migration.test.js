@@ -171,6 +171,10 @@ test("PostgreSQL options select TLS for Supabase and limit serverless pools with
     message: "postgresql://private-password@host/private",
   });
   assert.ok(!text.includes("private-password"));
+  const bootstrap = friendly({ code: "BOOTSTRAP_ADMIN_REQUIRED" });
+  assert.ok(bootstrap.includes("BOOTSTRAP_ADMIN_EMAIL"));
+  assert.ok(bootstrap.includes("BOOTSTRAP_ADMIN_PASSWORD"));
+  assert.ok(bootstrap.includes(".env"));
   assert.ok(
     !friendly({
       message: "unknown connection error private-password",

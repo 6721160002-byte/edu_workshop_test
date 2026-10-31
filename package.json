@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "node scripts/dev.js",
+    "dev:local": "node scripts/dev.js --local",
     "start": "node server.js",
     "check": "node scripts/check.js",
     "db:status": "node scripts/database.js status",

@@ -1,0 +1,16 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run localhost (SQLite)",
+			"type": "shell",
+			"command": "npm.cmd",
+			"args": [
+				"run",
+				"dev:local"
+			],
+			"isBackground": true,
+			"problemMatcher": []
+		}
+	]
+}
